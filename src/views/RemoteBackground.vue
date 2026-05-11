@@ -72,14 +72,16 @@
         />
       </q-tab-panel>
       <q-tab-panel name="filebrowser" class="q-pa-none">
-        <iframe
+        <!-- NEW UI (for development) -->
+        <FileBrowserManager :agent_id="agent_id" />
+        <!-- <iframe
           allow="clipboard-read; clipboard-write"
           :src="file"
           :style="{
             height: `${$q.screen.height - 30}px`,
             width: `${$q.screen.width}px`,
           }"
-        ></iframe>
+        ></iframe> -->
       </q-tab-panel>
       <q-tab-panel
         v-if="$route.query.agentPlatform === 'windows'"
@@ -105,6 +107,7 @@ import ProcessManager from "@/components/agents/remotebg/ProcessManager.vue";
 import ServicesManager from "@/components/agents/remotebg/ServicesManager.vue";
 import EventLogManager from "@/components/agents/remotebg/EventLogManager.vue";
 import RegistryManager from "@/components/agents/remotebg/RegistryManager.vue";
+import FileBrowserManager from "@/components/agents/remotebg/FileBrowserManager.vue";
 import registryIcon from "../assets/windows-registry.png";
 
 export default {
@@ -114,6 +117,7 @@ export default {
     EventLogManager,
     ProcessManager,
     RegistryManager,
+    FileBrowserManager,
   },
   setup() {
     // setup quasar
