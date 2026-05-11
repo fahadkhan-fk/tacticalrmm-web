@@ -376,6 +376,11 @@ import { computed, ref } from "vue";
 import type { QTableColumn } from "quasar";
 import { notifyWarning } from "@/utils/notify";
 
+// Client-side upload caps (align with backend when streaming is wired). */
+const MAX_UPLOAD_FILES_PER_SELECTION = 100;
+const MAX_UPLOAD_FILE_SIZE_BYTES = 100 * 1024 * 1024; // 100 MiB per file
+const MAX_UPLOAD_QUEUE_ITEMS = 500;
+
 defineProps<{
   agent_id: string;
 }>();
@@ -397,8 +402,11 @@ const currentPath = ref("C:\\Users\\Public\\Documents");
 const pathInput = ref(currentPath.value);
 const search = ref("");
 const selectedRows = ref<FileBrowserItem[]>([]);
+// True while a file-type drag is over the browser (overlay + drop affordance). */
 const isDragging = ref(false);
 const dragCounter = ref(0);
+// Set when DataTransfer looks like OS files; paired with dragCounter for overlay. */
+const isFileDragSession = ref(false);
 
 const history = ref<string[]>([currentPath.value]);
 const historyIndex = ref(0);
@@ -568,6 +576,30 @@ function showProperties(row: FileBrowserItem) {
   propertiesDialog.value = true;
 }
 
+function isFileDrag(dataTransfer: DataTransfer | null | undefined): boolean {
+  if (!dataTransfer) return false;
+
+  const types = dataTransfer.types;
+  if (types) {
+    for (let i = 0; i < types.length; i++) {
+      if (types[i] === "Files") return true;
+    }
+  }
+
+  const items = dataTransfer.items;
+  if (items?.length) {
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].kind === "file") return true;
+    }
+  }
+
+  return false;
+}
+
+function syncFileDropOverlay() {
+  isDragging.value = dragCounter.value > 0 && isFileDragSession.value;
+}
+
 function fileListToArray(list: FileList | null | undefined): File[] {
   if (!list?.length) return [];
   const out: File[] = [];
@@ -625,9 +657,56 @@ function queueFilesForUpload(files: File[]) {
   if (!assertUploadPath()) return;
   if (!files.length) return;
 
+  let batch = files;
+  const notes: string[] = [];
+
+  if (batch.length > MAX_UPLOAD_FILES_PER_SELECTION) {
+    notes.push(
+      `Only the first ${MAX_UPLOAD_FILES_PER_SELECTION} of ${batch.length} files were considered (per-selection limit).`,
+    );
+    batch = batch.slice(0, MAX_UPLOAD_FILES_PER_SELECTION);
+  }
+
+  const room = MAX_UPLOAD_QUEUE_ITEMS - uploadQueue.value.length;
+  if (room <= 0) {
+    notifyWarning(
+      `The upload queue is full (max ${MAX_UPLOAD_QUEUE_ITEMS} items). Remove some or clear the queue.`,
+    );
+    return;
+  }
+
+  const skippedOversized = batch.filter(
+    (f) => f.size > MAX_UPLOAD_FILE_SIZE_BYTES,
+  ).length;
+  const sizeOk = batch.filter((f) => f.size <= MAX_UPLOAD_FILE_SIZE_BYTES);
+  const toEnqueue = sizeOk.slice(0, room);
+  const skippedDueToQueue = sizeOk.length - toEnqueue.length;
+
+  if (skippedOversized > 0) {
+    notes.push(
+      `${skippedOversized} file(s) skipped — larger than ${formatBytes(MAX_UPLOAD_FILE_SIZE_BYTES)} each.`,
+    );
+  }
+  if (skippedDueToQueue > 0) {
+    notes.push(
+      `${skippedDueToQueue} file(s) not queued — would exceed the queue limit (${MAX_UPLOAD_QUEUE_ITEMS}).`,
+    );
+  }
+
+  if (notes.length) {
+    notifyWarning(notes.join(" "));
+  }
+
+  if (!toEnqueue.length) {
+    if (!notes.length) {
+      notifyWarning("No files could be added to the upload queue.");
+    }
+    return;
+  }
+
   const destinationPath = currentPath.value.trim();
 
-  for (const file of files) {
+  for (const file of toEnqueue) {
     const id = `up-${Date.now()}-${uploadIdSeq++}`;
     const item: UploadQueueItem = {
       id,
@@ -680,27 +759,37 @@ function clearUploadQueue() {
   uploadQueue.value = [];
 }
 
-function onDragEnter() {
+function onDragEnter(e: DragEvent) {
   dragCounter.value += 1;
-  isDragging.value = true;
+  if (isFileDrag(e.dataTransfer)) {
+    isFileDragSession.value = true;
+  }
+  syncFileDropOverlay();
 }
 
-function onDragOver() {
-  isDragging.value = true;
+function onDragOver(e: DragEvent) {
+  if (isFileDrag(e.dataTransfer)) {
+    isFileDragSession.value = true;
+  }
+  syncFileDropOverlay();
 }
 
 function onDragLeave() {
   dragCounter.value -= 1;
 
   if (dragCounter.value <= 0) {
-    isDragging.value = false;
     dragCounter.value = 0;
+    isFileDragSession.value = false;
+    isDragging.value = false;
+  } else {
+    syncFileDropOverlay();
   }
 }
 
 function onDrop(event: DragEvent) {
-  isDragging.value = false;
   dragCounter.value = 0;
+  isFileDragSession.value = false;
+  isDragging.value = false;
 
   const files = fileListToArray(event.dataTransfer?.files);
 
