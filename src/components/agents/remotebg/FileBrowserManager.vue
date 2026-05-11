@@ -39,6 +39,14 @@
     </div>
 
     <!-- Toolbar Row -->
+    <input
+      ref="fileInputRef"
+      type="file"
+      class="hidden-file-input"
+      multiple
+      @change="onFileInputChange"
+    />
+
     <div class="row items-center justify-between file-toolbar">
       <div class="row items-center q-gutter-sm">
         <!-- Primary CTA -->
@@ -48,6 +56,8 @@
           icon="upload"
           label="Upload"
           class="toolbar-primary-btn"
+          :disable="!hasUploadPath"
+          @click="openFilePicker"
         />
 
         <!-- Action buttons -->
@@ -135,8 +145,70 @@
       </div>
     </div>
 
+    <!-- Upload queue (picker + drag-drop share the same pipeline) -->
+    <div v-if="uploadQueueItems.length" class="upload-queue-section q-mb-sm">
+      <div class="row items-center justify-between q-mb-xs">
+        <div class="text-subtitle2 text-weight-medium">Upload queue</div>
+        <div class="row items-center q-gutter-xs">
+          <q-btn
+            dense
+            flat
+            no-caps
+            size="sm"
+            label="Clear all"
+            @click="clearUploadQueue"
+          />
+        </div>
+      </div>
+      <div class="text-caption text-grey-6 q-mb-sm">
+        Destination:
+        <span class="text-grey-4">{{ uploadDestinationLabel }}</span>
+      </div>
+      <q-list bordered separator dense class="upload-queue-list">
+        <q-item
+          v-for="item in uploadQueueItems"
+          :key="item.id"
+          class="upload-queue-item"
+        >
+          <q-item-section avatar>
+            <q-icon name="description" color="primary" size="22px" />
+          </q-item-section>
+          <q-item-section>
+            <q-item-label class="ellipsis">{{ item.name }}</q-item-label>
+            <q-item-label caption>{{ item.sizeLabel }}</q-item-label>
+            <q-linear-progress
+              :value="item.progress"
+              color="primary"
+              track-color="grey-9"
+              class="q-mt-xs upload-progress"
+              rounded
+              size="6px"
+            />
+          </q-item-section>
+          <q-item-section side>
+            <q-badge
+              :color="uploadStatusBadgeColor(item.status)"
+              :text-color="item.status === 'ready' ? 'dark' : undefined"
+              align="middle"
+            >
+              {{ uploadStatusLabel(item.status) }}
+            </q-badge>
+            <q-btn
+              dense
+              flat
+              round
+              icon="close"
+              size="sm"
+              class="q-mt-xs"
+              @click="removeUploadItem(item.id)"
+            />
+          </q-item-section>
+        </q-item>
+      </q-list>
+    </div>
+
     <!-- Table Area -->
-    <div class="col relative-position">
+    <div class="col relative-position file-table-wrap">
       <q-table
         flat
         dense
@@ -253,7 +325,7 @@
 
       <!-- Drag Upload Overlay -->
       <div
-        v-if="isDragging"
+        v-if="isDragging && hasUploadPath"
         class="drop-overlay column items-center justify-center"
       >
         <q-icon name="cloud_upload" size="52px" color="primary" />
@@ -302,6 +374,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import type { QTableColumn } from "quasar";
+import { notifyWarning } from "@/utils/notify";
 
 defineProps<{
   agent_id: string;
@@ -332,6 +405,36 @@ const historyIndex = ref(0);
 
 const propertiesDialog = ref(false);
 const selectedPropertyItem = ref<FileBrowserItem | null>(null);
+
+const fileInputRef = ref<HTMLInputElement | null>(null);
+
+type UploadQueueStatus = "ready" | "mock_uploaded";
+
+type UploadQueueItem = {
+  id: string;
+  file: File;
+  name: string;
+  sizeLabel: string;
+  destinationPath: string;
+  status: UploadQueueStatus;
+  /** 0–1; reserved for streaming progress — mock uses a quick ramp then full */
+  progress: number;
+};
+
+const uploadQueue = ref<UploadQueueItem[]>([]);
+let uploadIdSeq = 0;
+
+/** Exposed for template `v-for` typing (avoids `unknown` item in some vue-tsc setups). */
+const uploadQueueItems = computed<UploadQueueItem[]>(() => uploadQueue.value);
+
+const hasUploadPath = computed(() => currentPath.value.trim().length > 0);
+
+const uploadDestinationLabel = computed(() => {
+  if (!uploadQueue.value.length) return "";
+  const first = uploadQueue.value[0].destinationPath;
+  const allSame = uploadQueue.value.every((i) => i.destinationPath === first);
+  return allSame ? first : `${first} (+ other paths in queue)`;
+});
 
 const rows = ref<FileBrowserItem[]>([
   {
@@ -465,6 +568,118 @@ function showProperties(row: FileBrowserItem) {
   propertiesDialog.value = true;
 }
 
+function fileListToArray(list: FileList | null | undefined): File[] {
+  if (!list?.length) return [];
+  const out: File[] = [];
+  for (let i = 0; i < list.length; i++) {
+    const f = list.item(i);
+    if (f) out.push(f);
+  }
+  return out;
+}
+
+function formatBytes(bytes: number): string {
+  if (!bytes) return "0 B";
+  const k = 1024;
+  const sizes = ["B", "KB", "MB", "GB"] as const;
+  const i = Math.min(
+    sizes.length - 1,
+    Math.floor(Math.log(bytes) / Math.log(k)),
+  );
+  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
+}
+
+function uploadStatusLabel(status: UploadQueueStatus): string {
+  if (status === "ready") return "Ready";
+  return "Mock uploaded";
+}
+
+function uploadStatusBadgeColor(status: UploadQueueStatus): string {
+  if (status === "ready") return "grey-5";
+  return "positive";
+}
+
+function assertUploadPath(): boolean {
+  if (!hasUploadPath.value) {
+    notifyWarning("Select a folder path before uploading.");
+    return false;
+  }
+  return true;
+}
+
+function openFilePicker() {
+  if (!assertUploadPath()) return;
+  fileInputRef.value?.click();
+}
+
+function onFileInputChange(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const list = input.files;
+  const files = fileListToArray(list);
+  if (!files.length) return;
+  queueFilesForUpload(files);
+  input.value = "";
+}
+
+function queueFilesForUpload(files: File[]) {
+  if (!assertUploadPath()) return;
+  if (!files.length) return;
+
+  const destinationPath = currentPath.value.trim();
+
+  for (const file of files) {
+    const id = `up-${Date.now()}-${uploadIdSeq++}`;
+    const item: UploadQueueItem = {
+      id,
+      file,
+      name: file.name,
+      sizeLabel: formatBytes(file.size),
+      destinationPath,
+      status: "ready",
+      progress: 0,
+    };
+    uploadQueue.value.push(item);
+    scheduleMockUpload(item.id);
+  }
+}
+
+function scheduleMockUpload(itemId: string) {
+  const startDelay = 400;
+  const rampMs = 700;
+
+  window.setTimeout(() => {
+    const item = uploadQueue.value.find((i) => i.id === itemId);
+    if (!item || item.status !== "ready") return;
+
+    const start = performance.now();
+
+    function tick(now: number) {
+      const t = uploadQueue.value.find((i) => i.id === itemId);
+      if (!t) return;
+      if (t.status === "mock_uploaded") return;
+
+      const elapsed = now - start;
+      t.progress = Math.min(1, elapsed / rampMs);
+      if (elapsed < rampMs) {
+        requestAnimationFrame(tick);
+      } else {
+        t.progress = 1;
+        t.status = "mock_uploaded";
+      }
+    }
+
+    requestAnimationFrame(tick);
+  }, startDelay);
+}
+
+function removeUploadItem(id: string) {
+  uploadQueue.value = uploadQueue.value.filter((i) => i.id !== id);
+}
+
+function clearUploadQueue() {
+  uploadQueue.value = [];
+}
+
 function onDragEnter() {
   dragCounter.value += 1;
   isDragging.value = true;
@@ -487,20 +702,55 @@ function onDrop(event: DragEvent) {
   isDragging.value = false;
   dragCounter.value = 0;
 
-  const files = Array.from(event.dataTransfer?.files || []);
+  const files = fileListToArray(event.dataTransfer?.files);
 
   if (!files.length) return;
 
-  // UI-only for now. Backend upload will be wired later.
-  console.log("Dropped files:", files);
+  queueFilesForUpload(files);
 }
 </script>
 
 <style scoped>
+.hidden-file-input {
+  position: absolute;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
 .file-browser {
   height: calc(100vh - 80px);
   overflow: hidden;
   padding: 16px;
+}
+
+.file-table-wrap {
+  min-height: 0;
+}
+
+.upload-queue-section {
+  flex: 0 0 auto;
+  max-height: min(240px, 35vh);
+  overflow: auto;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.upload-queue-list {
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.upload-queue-item :deep(.q-item__section--side) {
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.upload-progress {
+  max-width: 100%;
 }
 
 .folder-path {
