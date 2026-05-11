@@ -67,6 +67,8 @@
           icon="create_new_folder"
           label="New Folder"
           class="toolbar-btn"
+          :disable="!hasUploadPath"
+          @click="openNewFolderDialog"
         />
         <q-btn
           dense
@@ -368,15 +370,51 @@
         </q-card-actions>
       </q-card>
     </q-dialog>
+
+    <!-- New Folder -->
+    <q-dialog v-model="newFolderDialog" @hide="resetNewFolderDialog">
+      <q-card style="min-width: 360px">
+        <q-card-section>
+          <div class="text-h6">New Folder</div>
+        </q-card-section>
+
+        <q-separator />
+
+        <q-card-section>
+          <q-input
+            ref="newFolderInputRef"
+            v-model="newFolderName"
+            dense
+            outlined
+            label="Folder name"
+            lazy-rules
+            :rules="newFolderNameRules"
+            maxlength="255"
+            counter
+            @keyup.enter="submitNewFolder"
+          />
+        </q-card-section>
+
+        <q-card-actions align="right">
+          <q-btn flat label="Cancel" color="primary" v-close-popup />
+          <q-btn
+            unelevated
+            label="Create"
+            color="primary"
+            @click="submitNewFolder"
+          />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, nextTick, ref } from "vue";
 import type { QTableColumn } from "quasar";
-import { notifyWarning } from "@/utils/notify";
+import { notifySuccess, notifyWarning } from "@/utils/notify";
 
-// Client-side upload caps (align with backend when streaming is wired). */
+// Client-side upload caps (align with backend when streaming is wired).
 const MAX_UPLOAD_FILES_PER_SELECTION = 100;
 const MAX_UPLOAD_FILE_SIZE_BYTES = 100 * 1024 * 1024; // 100 MiB per file
 const MAX_UPLOAD_QUEUE_ITEMS = 500;
@@ -402,10 +440,10 @@ const currentPath = ref("C:\\Users\\Public\\Documents");
 const pathInput = ref(currentPath.value);
 const search = ref("");
 const selectedRows = ref<FileBrowserItem[]>([]);
-// True while a file-type drag is over the browser (overlay + drop affordance). */
+// True while a file-type drag is over the browser (overlay + drop affordance).
 const isDragging = ref(false);
 const dragCounter = ref(0);
-// Set when DataTransfer looks like OS files; paired with dragCounter for overlay. */
+// Set when DataTransfer looks like OS files; paired with dragCounter for overlay.
 const isFileDragSession = ref(false);
 
 const history = ref<string[]>([currentPath.value]);
@@ -413,6 +451,13 @@ const historyIndex = ref(0);
 
 const propertiesDialog = ref(false);
 const selectedPropertyItem = ref<FileBrowserItem | null>(null);
+
+const newFolderDialog = ref(false);
+const newFolderName = ref("");
+const newFolderInputRef = ref<{
+  validate: () => Promise<boolean>;
+  resetValidation: () => void;
+} | null>(null);
 
 const fileInputRef = ref<HTMLInputElement | null>(null);
 
@@ -425,14 +470,18 @@ type UploadQueueItem = {
   sizeLabel: string;
   destinationPath: string;
   status: UploadQueueStatus;
-  /** 0–1; reserved for streaming progress — mock uses a quick ramp then full */
+  // 0–1; reserved for streaming progress — mock uses a quick ramp then full
   progress: number;
 };
 
 const uploadQueue = ref<UploadQueueItem[]>([]);
 let uploadIdSeq = 0;
+let newFolderRowIdSeq = 100;
 
-/** Exposed for template `v-for` typing (avoids `unknown` item in some vue-tsc setups). */
+// Windows / SMB-style single-segment name checks (agent is often Windows).
+const WINDOWS_FOLDER_NAME_INVALID_CHARS = /[\\/:*?"<>|\x00-\x1f]/;
+
+// Exposed for template `v-for` typing (avoids `unknown` item in some vue-tsc setups).
 const uploadQueueItems = computed<UploadQueueItem[]>(() => uploadQueue.value);
 
 const hasUploadPath = computed(() => currentPath.value.trim().length > 0);
@@ -525,6 +574,93 @@ const filteredRows = computed(() => {
 
   return rows.value.filter((row) => row.name.toLowerCase().includes(query));
 });
+
+const newFolderNameRules = computed(() => [
+  (v: string | number | null | undefined) =>
+    !!(v !== undefined && v !== null && String(v).trim()) ||
+    "Folder name is required",
+  (v: string | number | null | undefined) => {
+    const name = String(v ?? "").trim();
+    if (!name) return true;
+    if (name === "." || name === "..") return "The name cannot be . or ..";
+    if (WINDOWS_FOLDER_NAME_INVALID_CHARS.test(name))
+      return 'Name cannot contain \\ / : * ? " < > | or control characters';
+    if (name.endsWith(".") || name.endsWith(" "))
+      return "Name cannot end with a space or a period";
+    return true;
+  },
+  (v: string | number | null | undefined) => {
+    const name = String(v ?? "").trim();
+    if (!name) return true;
+    const lower = name.toLowerCase();
+    if (rows.value.some((r) => r.name.toLowerCase() === lower))
+      return "A file or folder with this name already exists";
+    return true;
+  },
+]);
+
+function joinRemotePathSegment(basePath: string, segment: string): string {
+  return `${basePath.replace(/\\+$/, "")}\\${segment}`;
+}
+
+function formatMockListTimestamp(d: Date): string {
+  const pad2 = (n: number) => String(n).padStart(2, "0");
+  const y = d.getFullYear();
+  const mo = pad2(d.getMonth() + 1);
+  const day = pad2(d.getDate());
+  const h24 = d.getHours();
+  const ampm = h24 >= 12 ? "PM" : "AM";
+  const h12 = h24 % 12 || 12;
+  const hh = pad2(h12);
+  const min = pad2(d.getMinutes());
+  return `${y}-${mo}-${day} ${hh}:${min} ${ampm}`;
+}
+
+function openNewFolderDialog() {
+  if (!hasUploadPath.value) {
+    notifyWarning("Select a folder path before creating a folder.");
+    return;
+  }
+  newFolderName.value = "";
+  newFolderDialog.value = true;
+  nextTick(() => {
+    newFolderInputRef.value?.resetValidation();
+  });
+}
+
+function resetNewFolderDialog() {
+  newFolderName.value = "";
+  nextTick(() => {
+    newFolderInputRef.value?.resetValidation();
+  });
+}
+
+async function submitNewFolder() {
+  const input = newFolderInputRef.value;
+  if (input) {
+    const ok = await input.validate();
+    if (!ok) return;
+  }
+
+  const name = newFolderName.value.trim();
+  if (!name) return;
+
+  const now = new Date();
+  const stamp = formatMockListTimestamp(now);
+
+  rows.value.push({
+    id: `nf-${newFolderRowIdSeq++}`,
+    name,
+    path: joinRemotePathSegment(currentPath.value.trim(), name),
+    type: "folder",
+    modified: stamp,
+    created: stamp,
+    accessed: stamp,
+  });
+
+  notifySuccess("Folder created");
+  newFolderDialog.value = false;
+}
 
 function navigateToPath() {
   const nextPath = pathInput.value.trim();
