@@ -93,6 +93,7 @@
           label="Rename"
           class="toolbar-btn"
           :disable="selectedRows.length !== 1"
+          @click="openRenameDialog()"
         />
 
         <q-btn
@@ -261,7 +262,11 @@
                   <q-item-section>Download</q-item-section>
                 </q-item>
 
-                <q-item clickable v-close-popup>
+                <q-item
+                  clickable
+                  v-close-popup
+                  @click="openRenameDialog(props.row)"
+                >
                   <q-item-section avatar>
                     <q-icon name="edit" size="18px" />
                   </q-item-section>
@@ -408,6 +413,47 @@
         </q-card-actions>
       </q-card>
     </q-dialog>
+
+    <!-- Rename -->
+    <q-dialog v-model="renameDialog" @hide="resetRenameDialog">
+      <q-card style="min-width: 360px">
+        <q-card-section>
+          <div class="text-h6">Rename</div>
+        </q-card-section>
+
+        <q-separator />
+
+        <q-card-section>
+          <q-input
+            ref="renameInputRef"
+            v-model="renameName"
+            dense
+            outlined
+            autofocus
+            label="Name"
+            lazy-rules
+            :rules="renameNameRules"
+            maxlength="255"
+            counter
+            @keyup.enter="submitRename"
+          />
+        </q-card-section>
+
+        <q-card-actions align="right">
+          <q-btn flat label="Cancel" color="primary" v-close-popup />
+          <q-btn
+            unelevated
+            label="Rename"
+            color="primary"
+            :disable="
+              !renameName.trim() ||
+              renameName.trim() === renameOriginalName.trim()
+            "
+            @click="submitRename"
+          />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
   </div>
 </template>
 
@@ -457,6 +503,12 @@ const selectedPropertyItem = ref<FileBrowserItem | null>(null);
 const newFolderDialog = ref(false);
 const newFolderName = ref("");
 const newFolderInputRef = ref<InstanceType<typeof QInput> | null>(null);
+
+const renameDialog = ref(false);
+const renameTargetItem = ref<FileBrowserItem | null>(null);
+const renameName = ref("");
+const renameOriginalName = ref("");
+const renameInputRef = ref<InstanceType<typeof QInput> | null>(null);
 
 const fileInputRef = ref<HTMLInputElement | null>(null);
 
@@ -574,32 +626,74 @@ const filteredRows = computed(() => {
   return rows.value.filter((row) => row.name.toLowerCase().includes(query));
 });
 
+function nameSegmentBaseRule(
+  v: string | number | null | undefined,
+): true | string {
+  const name = String(v ?? "").trim();
+  if (!name) return "Name is required";
+  if (name === "." || name === "..") return "The name cannot be . or ..";
+  if (WINDOWS_FOLDER_NAME_INVALID_CHARS.test(name))
+    return 'Name cannot contain \\ / : * ? " < > | or control characters';
+  if (name.endsWith(".") || name.endsWith(" "))
+    return "Name cannot end with a space or a period";
+  return true;
+}
+
+/** Pass `excludeId` when renaming so the current row does not count as a duplicate. */
+function duplicateNameAmongRowsRule(
+  v: string | number | null | undefined,
+  excludeId?: string,
+): true | string {
+  const name = String(v ?? "").trim();
+  if (!name) return true;
+  const lower = name.toLowerCase();
+  const dup = rows.value.some(
+    (r) =>
+      r.name.toLowerCase() === lower &&
+      (excludeId === undefined || r.id !== excludeId),
+  );
+  return !dup || "A file or folder with this name already exists";
+}
+
 const newFolderNameRules = computed(() => [
-  (v: string | number | null | undefined) =>
-    !!(v !== undefined && v !== null && String(v).trim()) ||
-    "Folder name is required",
-  (v: string | number | null | undefined) => {
-    const name = String(v ?? "").trim();
-    if (!name) return true;
-    if (name === "." || name === "..") return "The name cannot be . or ..";
-    if (WINDOWS_FOLDER_NAME_INVALID_CHARS.test(name))
-      return 'Name cannot contain \\ / : * ? " < > | or control characters';
-    if (name.endsWith(".") || name.endsWith(" "))
-      return "Name cannot end with a space or a period";
-    return true;
-  },
-  (v: string | number | null | undefined) => {
-    const name = String(v ?? "").trim();
-    if (!name) return true;
-    const lower = name.toLowerCase();
-    if (rows.value.some((r) => r.name.toLowerCase() === lower))
-      return "A file or folder with this name already exists";
-    return true;
-  },
+  (v: string | number | null | undefined) => nameSegmentBaseRule(v),
+  (v: string | number | null | undefined) => duplicateNameAmongRowsRule(v),
 ]);
+
+const renameNameRules = computed(() => {
+  const excludeId = renameTargetItem.value?.id;
+  return [
+    (v: string | number | null | undefined) => nameSegmentBaseRule(v),
+    (v: string | number | null | undefined) =>
+      duplicateNameAmongRowsRule(v, excludeId),
+  ];
+});
 
 function joinRemotePathSegment(basePath: string, segment: string): string {
   return `${basePath.replace(/\\+$/, "")}\\${segment}`;
+}
+
+/** Parent directory of a full file/folder path (last segment removed). */
+function getParentRemotePath(fullPath: string): string {
+  const trimmed = fullPath.trim().replace(/[/\\]+$/, "");
+  const lastBack = trimmed.lastIndexOf("\\");
+  const lastFwd = trimmed.lastIndexOf("/");
+  const lastSep = Math.max(lastBack, lastFwd);
+  if (lastSep <= 0) return trimmed;
+  return trimmed.slice(0, lastSep);
+}
+
+function replacePathLastSegment(
+  fullPath: string,
+  newLastSegment: string,
+): string {
+  return joinRemotePathSegment(getParentRemotePath(fullPath), newLastSegment);
+}
+
+function extensionFromFileName(fileName: string): string | undefined {
+  const i = fileName.lastIndexOf(".");
+  if (i <= 0 || i === fileName.length - 1) return undefined;
+  return fileName.slice(i + 1).toUpperCase();
 }
 
 function formatMockListTimestamp(d: Date): string {
@@ -659,6 +753,73 @@ async function submitNewFolder() {
 
   notifySuccess("Folder created");
   newFolderDialog.value = false;
+}
+
+function openRenameDialog(row?: FileBrowserItem) {
+  const item = row ?? selectedRows.value[0];
+  if (!item) {
+    notifyWarning("Select a single item to rename.");
+    return;
+  }
+  renameTargetItem.value = item;
+  renameOriginalName.value = item.name;
+  renameName.value = item.name;
+  renameDialog.value = true;
+  nextTick(() => {
+    renameInputRef.value?.resetValidation();
+  });
+}
+
+function resetRenameDialog() {
+  renameTargetItem.value = null;
+  renameName.value = "";
+  renameOriginalName.value = "";
+  nextTick(() => {
+    renameInputRef.value?.resetValidation();
+  });
+}
+
+async function submitRename() {
+  const target = renameTargetItem.value;
+  if (!target) return;
+
+  const input = renameInputRef.value;
+  if (input) {
+    const ok = await input.validate();
+    if (!ok) return;
+  }
+
+  const newName = renameName.value.trim();
+  if (!newName) return;
+
+  if (newName === target.name) {
+    renameDialog.value = false;
+    return;
+  }
+
+  const newPath = replacePathLastSegment(target.path, newName);
+  const idx = rows.value.findIndex((r) => r.id === target.id);
+  if (idx === -1) return;
+
+  const prev = rows.value[idx];
+  const next: FileBrowserItem = {
+    ...prev,
+    name: newName,
+    path: newPath,
+  };
+  if (prev.type === "file") {
+    const ext = extensionFromFileName(newName);
+    if (ext !== undefined) next.extension = ext;
+    else delete next.extension;
+  }
+
+  rows.value.splice(idx, 1, next);
+  selectedRows.value = selectedRows.value.map((s) =>
+    s.id === target.id ? next : s,
+  );
+
+  notifySuccess("Renamed");
+  renameDialog.value = false;
 }
 
 function navigateToPath() {
