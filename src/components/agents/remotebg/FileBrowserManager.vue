@@ -386,6 +386,7 @@
             v-model="newFolderName"
             dense
             outlined
+            autofocus
             label="Folder name"
             lazy-rules
             :rules="newFolderNameRules"
@@ -401,6 +402,7 @@
             unelevated
             label="Create"
             color="primary"
+            :disable="!newFolderName.trim()"
             @click="submitNewFolder"
           />
         </q-card-actions>
@@ -411,7 +413,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, ref } from "vue";
-import type { QTableColumn } from "quasar";
+import { QInput, type QTableColumn } from "quasar";
 import { notifySuccess, notifyWarning } from "@/utils/notify";
 
 // Client-side upload caps (align with backend when streaming is wired).
@@ -454,10 +456,7 @@ const selectedPropertyItem = ref<FileBrowserItem | null>(null);
 
 const newFolderDialog = ref(false);
 const newFolderName = ref("");
-const newFolderInputRef = ref<{
-  validate: () => Promise<boolean>;
-  resetValidation: () => void;
-} | null>(null);
+const newFolderInputRef = ref<InstanceType<typeof QInput> | null>(null);
 
 const fileInputRef = ref<HTMLInputElement | null>(null);
 
