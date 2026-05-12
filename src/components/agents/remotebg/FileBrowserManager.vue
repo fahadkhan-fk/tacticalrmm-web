@@ -77,6 +77,7 @@
           label="Download"
           class="toolbar-btn"
           :disable="selectedRows.length === 0"
+          @click="downloadSelectedItems"
         />
         <q-btn
           dense
@@ -253,9 +254,9 @@
                 </q-item>
 
                 <q-item
-                  v-if="props.row.type === 'file'"
                   clickable
                   v-close-popup
+                  @click="downloadFromContext(props.row)"
                 >
                   <q-item-section avatar>
                     <q-icon name="download" size="18px" />
@@ -492,7 +493,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from "vue";
 import { QInput, type QTableColumn } from "quasar";
-import { notifySuccess, notifyWarning } from "@/utils/notify";
+import { notifyInfo, notifySuccess, notifyWarning } from "@/utils/notify";
 
 // Client-side upload caps (align with backend when streaming is wired).
 const MAX_UPLOAD_FILES_PER_SELECTION = 100;
@@ -914,6 +915,60 @@ function confirmDelete() {
   } else {
     notifySuccess(`Deleted ${count} items.`);
   }
+}
+
+function mockDownloadFileName(
+  items: FileBrowserItem[],
+  asArchive: boolean,
+): string {
+  if (asArchive) return "download.zip.mock.txt";
+  if (items.length === 1) return `${items[0].name}.mock-download.txt`;
+  return "download.mock.txt";
+}
+
+function startMockDownload(items: FileBrowserItem[]) {
+  if (!items.length) {
+    notifyWarning("Select one or more items to download.");
+    return;
+  }
+
+  const folderCount = items.filter((item) => item.type === "folder").length;
+  const asArchive = folderCount > 0;
+
+  const manifest = [
+    "Mock Tactical RMM file browser download",
+    `Mode: ${asArchive ? "ZIP archive" : "direct file download"}`,
+    `Source path: ${currentPath.value}`,
+    "",
+    "Items:",
+    ...items.map((item) => `- [${item.type}] ${item.path}`),
+    "",
+  ].join("\n");
+
+  const blob = new Blob([manifest], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = mockDownloadFileName(items, asArchive);
+  link.click();
+  URL.revokeObjectURL(url);
+
+  notifyInfo(
+    items.length === 1
+      ? `Downloading "${items[0].name}"${asArchive ? " as ZIP" : ""}.`
+      : `Downloading ${items.length} items${asArchive ? " as ZIP archive" : ""}.`,
+  );
+}
+
+function downloadSelectedItems() {
+  startMockDownload(selectedRows.value);
+}
+
+// Right-click Download mirrors delete behavior: selected row downloads the selection.
+function downloadFromContext(row: FileBrowserItem) {
+  const selected = selectedRows.value;
+  const inSelection = selected.some((s) => s.id === row.id);
+  startMockDownload(inSelection && selected.length > 0 ? selected : [row]);
 }
 
 function navigateToPath() {
