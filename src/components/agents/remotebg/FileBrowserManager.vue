@@ -140,8 +140,8 @@
           v-model="search"
           dense
           outlined
-          debounce="250"
-          placeholder="Search files"
+          clearable
+          placeholder="Filter by name in this folder"
           class="file-search"
         >
           <template #prepend>
@@ -237,7 +237,7 @@
         :rows-per-page-options="[0]"
         selection="multiple"
         v-model:selected="selectedRows"
-        no-data-label="Folder is empty"
+        :no-data-label="tableNoDataLabel"
       >
         <template #body="props">
           <q-tr
@@ -512,7 +512,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { copyToClipboard, QInput, type QTableColumn } from "quasar";
 import {
   notifyError,
@@ -681,12 +681,27 @@ const columns: QTableColumn<FileBrowserItem>[] = [
 ];
 
 const filteredRows = computed(() => {
-  if (!search.value.trim()) return rows.value;
+  const q = (search.value ?? "").trim().toLowerCase();
+  if (!q) return rows.value;
 
-  const query = search.value.toLowerCase();
-
-  return rows.value.filter((row) => row.name.toLowerCase().includes(query));
+  return rows.value.filter((row) => row.name.toLowerCase().includes(q));
 });
+
+/** Shown when the table has zero rows (empty folder vs no filter matches). */
+const tableNoDataLabel = computed(() => {
+  const q = (search.value ?? "").trim();
+  if (q && rows.value.length > 0) return "No items match your filter";
+  return "Folder is empty";
+});
+
+watch(
+  filteredRows,
+  (visible) => {
+    const ids = new Set(visible.map((r) => r.id));
+    selectedRows.value = selectedRows.value.filter((s) => ids.has(s.id));
+  },
+  { flush: "post" },
+);
 
 function nameSegmentBaseRule(
   v: string | number | null | undefined,
@@ -1028,7 +1043,10 @@ function goBack() {
 
 function refresh() {
   loading.value = true;
+  selectedRows.value = [];
 
+  // UI-only: brief loading; path unchanged; `search` stays (still filters reloaded `rows` when backend exists).
+  // TODO: await directory reload for `currentPath` (agent/filesystem); then set `rows` from response.
   window.setTimeout(() => {
     loading.value = false;
   }, 350);
