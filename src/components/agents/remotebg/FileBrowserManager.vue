@@ -107,14 +107,24 @@
         >
           <q-menu transition-show="jump-up" transition-hide="jump-down">
             <q-list dense class="file-context-menu" style="min-width: 180px">
-              <q-item clickable v-close-popup>
+              <q-item
+                clickable
+                v-close-popup
+                :disable="selectedRows.length !== 1"
+                @click="showPropertiesFromToolbar"
+              >
                 <q-item-section avatar>
                   <q-icon name="info" size="18px" />
                 </q-item-section>
                 <q-item-section>Properties</q-item-section>
               </q-item>
 
-              <q-item clickable v-close-popup>
+              <q-item
+                clickable
+                v-close-popup
+                :disable="selectedRows.length === 0"
+                @click="copySelectedPathsToClipboard"
+              >
                 <q-item-section avatar>
                   <q-icon name="content_copy" size="18px" />
                 </q-item-section>
@@ -297,6 +307,17 @@
                     <q-icon name="info" size="18px" />
                   </q-item-section>
                   <q-item-section>Properties</q-item-section>
+                </q-item>
+
+                <q-item
+                  clickable
+                  v-close-popup
+                  @click="copyPathFromContext(props.row)"
+                >
+                  <q-item-section avatar>
+                    <q-icon name="content_copy" size="18px" />
+                  </q-item-section>
+                  <q-item-section>Copy Path</q-item-section>
                 </q-item>
               </q-list>
             </q-menu>
@@ -492,8 +513,13 @@
 
 <script setup lang="ts">
 import { computed, nextTick, ref } from "vue";
-import { QInput, type QTableColumn } from "quasar";
-import { notifyInfo, notifySuccess, notifyWarning } from "@/utils/notify";
+import { copyToClipboard, QInput, type QTableColumn } from "quasar";
+import {
+  notifyError,
+  notifyInfo,
+  notifySuccess,
+  notifyWarning,
+} from "@/utils/notify";
 
 // Client-side upload caps (align with backend when streaming is wired).
 const MAX_UPLOAD_FILES_PER_SELECTION = 100;
@@ -1019,6 +1045,48 @@ function openFolder(row: FileBrowserItem) {
 function showProperties(row: FileBrowserItem) {
   selectedPropertyItem.value = row;
   propertiesDialog.value = true;
+}
+
+// Properties: same as Explorer — one focused item.
+function showPropertiesFromToolbar() {
+  const sel = selectedRows.value;
+  if (sel.length !== 1) {
+    notifyWarning("Select exactly one item to view properties.");
+    return;
+  }
+  showProperties(sel[0]);
+}
+
+function copyPathsToClipboard(items: FileBrowserItem[]) {
+  if (!items.length) {
+    notifyWarning("Select one or more items to copy their paths.");
+    return;
+  }
+  const text = items.map((r) => r.path).join("\n");
+  copyToClipboard(text)
+    .then(() => {
+      notifySuccess(
+        items.length === 1
+          ? "Path copied to clipboard."
+          : `${items.length} paths copied to clipboard.`,
+      );
+    })
+    .catch(() => {
+      notifyError("Unable to copy to clipboard.");
+    });
+}
+
+function copySelectedPathsToClipboard() {
+  copyPathsToClipboard(selectedRows.value);
+}
+
+// Same selection rule as context Download / Delete: row in selection: copy all selected paths.
+function copyPathFromContext(row: FileBrowserItem) {
+  const selected = selectedRows.value;
+  const inSelection = selected.some((s) => s.id === row.id);
+  copyPathsToClipboard(
+    inSelection && selected.length > 0 ? [...selected] : [row],
+  );
 }
 
 function isFileDrag(dataTransfer: DataTransfer | null | undefined): boolean {
