@@ -85,6 +85,7 @@
           label="Delete"
           class="toolbar-btn"
           :disable="selectedRows.length === 0"
+          @click="openDeleteDialog"
         />
         <q-btn
           dense
@@ -273,7 +274,11 @@
                   <q-item-section>Rename</q-item-section>
                 </q-item>
 
-                <q-item clickable v-close-popup>
+                <q-item
+                  clickable
+                  v-close-popup
+                  @click="openDeleteDialogFromContext(props.row)"
+                >
                   <q-item-section avatar>
                     <q-icon name="delete" size="18px" color="negative" />
                   </q-item-section>
@@ -454,6 +459,33 @@
         </q-card-actions>
       </q-card>
     </q-dialog>
+
+    <!-- Delete confirmation (mandatory before removing items) -->
+    <q-dialog v-model="deleteDialog" @hide="resetDeleteDialog">
+      <q-card class="delete-confirm-card">
+        <q-card-section>
+          <div class="text-h6 delete-confirm-title">
+            {{ deleteConfirmTitle }}
+          </div>
+          <div class="text-body2 q-mt-sm text-negative delete-confirm-body">
+            {{ deleteConfirmBody }}
+          </div>
+        </q-card-section>
+
+        <q-separator />
+
+        <q-card-actions align="right">
+          <q-btn flat label="Cancel" color="primary" v-close-popup />
+          <q-btn
+            unelevated
+            label="Delete"
+            color="negative"
+            text-color="white"
+            @click="confirmDelete"
+          />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
   </div>
 </template>
 
@@ -509,6 +541,9 @@ const renameTargetItem = ref<FileBrowserItem | null>(null);
 const renameName = ref("");
 const renameOriginalName = ref("");
 const renameInputRef = ref<InstanceType<typeof QInput> | null>(null);
+
+const deleteDialog = ref(false);
+const deletePendingItems = ref<FileBrowserItem[]>([]);
 
 const fileInputRef = ref<HTMLInputElement | null>(null);
 
@@ -820,6 +855,65 @@ async function submitRename() {
 
   notifySuccess("Renamed");
   renameDialog.value = false;
+}
+
+const deleteConfirmTitle = computed(() => {
+  const pending = deletePendingItems.value;
+  if (pending.length === 0) return "";
+  if (pending.length === 1) return `Delete "${pending[0].name}" ?`;
+  return `Delete ${pending.length} items ?`;
+});
+
+const deleteConfirmBody = computed(() => {
+  const n = deletePendingItems.value.length;
+  if (n === 0) return "";
+  if (n === 1) return "This item will be permanently deleted.";
+  return "These items will be permanently deleted.";
+});
+
+function openDeleteDialog() {
+  if (selectedRows.value.length === 0) {
+    notifyWarning("Select one or more items to delete.");
+    return;
+  }
+  deletePendingItems.value = [...selectedRows.value];
+  deleteDialog.value = true;
+}
+
+// Right-click Delete: if the row is part of the current selection, delete all selected; otherwise delete that row only.
+function openDeleteDialogFromContext(row: FileBrowserItem) {
+  const selected = selectedRows.value;
+  const inSelection = selected.some((s) => s.id === row.id);
+  deletePendingItems.value =
+    inSelection && selected.length > 0 ? [...selected] : [row];
+  deleteDialog.value = true;
+}
+
+function resetDeleteDialog() {
+  deletePendingItems.value = [];
+}
+
+function confirmDelete() {
+  const pending = deletePendingItems.value;
+  if (!pending.length) {
+    deleteDialog.value = false;
+    return;
+  }
+
+  const ids = new Set(pending.map((i) => i.id));
+  const count = pending.length;
+  const singleName = count === 1 ? pending[0].name : "";
+
+  rows.value = rows.value.filter((r) => !ids.has(r.id));
+  selectedRows.value = [];
+  deleteDialog.value = false;
+  deletePendingItems.value = [];
+
+  if (count === 1) {
+    notifySuccess(`Deleted "${singleName}".`);
+  } else {
+    notifySuccess(`Deleted ${count} items.`);
+  }
 }
 
 function navigateToPath() {
@@ -1272,6 +1366,19 @@ function onDrop(event: DragEvent) {
 .file-toolbar :deep(.toolbar-icon-btn) {
   width: 36px;
   height: 36px;
+}
+
+.delete-confirm-card {
+  min-width: 360px;
+  max-width: min(480px, 92vw);
+}
+
+.delete-confirm-title {
+  word-break: break-word;
+}
+
+.delete-confirm-body {
+  line-height: 1.45;
 }
 
 .file-context-menu .q-item__section--avatar {
