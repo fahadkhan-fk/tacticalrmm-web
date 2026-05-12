@@ -19,22 +19,67 @@
 
       <q-btn dense flat icon="arrow_forward" disable class="nav-btn" />
 
-      <div class="text-body2 row items-center px-2 folder-path">
+      <div class="folder-path path-bar row no-wrap px-2 min-width-0">
+        <q-icon
+          name="far fa-folder-open"
+          class="q-mr-sm text-blue-5 crumb-folder-icon self-center"
+          size="18px"
+          @click.stop="onFolderPathIconClick"
+        />
+
+        <!-- Browse: click empty bar / separators / padding → edit; segment buttons navigate (click.stop). -->
+        <div
+          v-if="!pathEditMode"
+          class="row items-center col crumb-path-hitbox min-width-0"
+          @click="onPathBarClick"
+        >
+          <div class="row items-center col crumb-bar no-wrap min-width-0">
+            <div class="row items-center col crumb-scroll min-width-0">
+              <template
+                v-for="(seg, idx) in breadcrumbSegments"
+                :key="`${idx}-${seg.fullPath}`"
+              >
+                <span
+                  v-if="idx > 0"
+                  class="crumb-separator text-grey-6"
+                  aria-hidden="true"
+                  >&gt;</span
+                >
+                <q-btn
+                  dense
+                  flat
+                  no-caps
+                  class="crumb-btn"
+                  :class="{
+                    'crumb-btn--current': isCurrentBreadcrumbSegment(seg),
+                  }"
+                  :disable="isCurrentBreadcrumbSegment(seg)"
+                  @click.stop="onBreadcrumbSegmentClick(seg)"
+                >
+                  {{ seg.label }}
+                </q-btn>
+              </template>
+              <span
+                v-if="breadcrumbSegments.length === 0 && currentPath.trim()"
+                class="text-grey-7 ellipsis col crumb-fallback-path"
+                >{{ currentPath }}</span
+              >
+            </div>
+          </div>
+        </div>
+
+        <!-- Edit mode: paste / type full path -->
         <q-input
+          v-else
+          ref="pathEditInputRef"
           v-model="pathInput"
           dense
-          class="col"
+          class="col path-edit-input min-width-0"
           borderless
           @keyup.enter="navigateToPath"
-        >
-          <template #prepend>
-            <q-icon
-              name="far fa-folder-open"
-              class="q-mr-sm text-blue-5"
-              size="18px"
-            />
-          </template>
-        </q-input>
+          @keyup.esc="cancelPathEdit"
+          @blur="onPathEditBlur"
+        />
       </div>
     </div>
 
@@ -545,6 +590,9 @@ type FileBrowserItem = {
 const loading = ref(false);
 const currentPath = ref("C:\\Users\\Public\\Documents");
 const pathInput = ref(currentPath.value);
+// When false, show clickable breadcrumb segments; when true, show full path input.
+const pathEditMode = ref(false);
+const pathEditInputRef = ref<InstanceType<typeof QInput> | null>(null);
 const search = ref("");
 const selectedRows = ref<FileBrowserItem[]>([]);
 // True while a file-type drag is over the browser (overlay + drop affordance).
@@ -598,6 +646,111 @@ const WINDOWS_FOLDER_NAME_INVALID_CHARS = /[\\/:*?"<>|\x00-\x1f]/;
 const uploadQueueItems = computed<UploadQueueItem[]>(() => uploadQueue.value);
 
 const hasUploadPath = computed(() => currentPath.value.trim().length > 0);
+
+type BreadcrumbSegment = { label: string; fullPath: string };
+
+function normalizePathSlashes(p: string): string {
+  return p.trim().replace(/\//g, "\\");
+}
+
+// Case-insensitive path identity for Windows-style browsing (drive + UNC).
+function pathKeyForCompare(p: string): string {
+  let s = normalizePathSlashes(p);
+  const driveOnly = /^([A-Za-z]:)\\*$/.exec(s);
+  if (driveOnly) return `${driveOnly[1].toLowerCase()}\\`;
+  if (s.startsWith("\\\\")) {
+    return s.replace(/\\+$/, "").toLowerCase();
+  }
+  return s.replace(/\\+$/, "").toLowerCase();
+}
+
+function pathsEqual(a: string, b: string): boolean {
+  return pathKeyForCompare(a) === pathKeyForCompare(b);
+}
+
+// Build segments for C: > Users > Public > … and UNC \\server > share >
+function parsePathToBreadcrumbs(raw: string): BreadcrumbSegment[] {
+  const normalized = normalizePathSlashes(raw);
+  if (!normalized) return [];
+
+  if (normalized.startsWith("\\\\")) {
+    const noTrail = normalized.replace(/\\+$/, "");
+    const inner = noTrail.slice(2).split("\\").filter(Boolean);
+    if (inner.length === 0) {
+      return [{ label: "\\\\", fullPath: "\\\\" }];
+    }
+    return inner.map((label, i) => ({
+      label,
+      fullPath: "\\\\" + inner.slice(0, i + 1).join("\\"),
+    }));
+  }
+
+  const parts = normalized.split("\\").filter(Boolean);
+  if (parts.length === 0) return [];
+
+  const first = parts[0];
+  if (/^[A-Za-z]:$/.test(first)) {
+    const out: BreadcrumbSegment[] = [{ label: first, fullPath: `${first}\\` }];
+    for (let i = 1; i < parts.length; i++) {
+      const fullPath = `${first}\\${parts.slice(1, i + 1).join("\\")}`;
+      out.push({ label: parts[i], fullPath });
+    }
+    return out;
+  }
+
+  return parts.map((label, i) => ({
+    label,
+    fullPath: parts.slice(0, i + 1).join("\\"),
+  }));
+}
+
+const breadcrumbSegments = computed(() =>
+  parsePathToBreadcrumbs(currentPath.value),
+);
+
+function isCurrentBreadcrumbSegment(seg: BreadcrumbSegment): boolean {
+  return pathsEqual(seg.fullPath, currentPath.value);
+}
+
+function onBreadcrumbSegmentClick(seg: BreadcrumbSegment) {
+  if (isCurrentBreadcrumbSegment(seg)) return;
+  setPath(seg.fullPath);
+}
+
+// Windows-style: click the path bar (not a folder segment) to type a path.
+function onPathBarClick(ev: MouseEvent) {
+  const el = ev.target as HTMLElement | null;
+  if (el?.closest?.(".crumb-btn")) return;
+  enterPathEditMode();
+}
+
+function onFolderPathIconClick() {
+  if (!pathEditMode.value) enterPathEditMode();
+}
+
+function enterPathEditMode() {
+  pathEditMode.value = true;
+  pathInput.value = currentPath.value;
+  nextTick(() => {
+    const inp = pathEditInputRef.value;
+    if (!inp) return;
+    inp.focus();
+    const root = inp.$el as HTMLElement | undefined;
+    const native = root?.querySelector("input");
+    if (native instanceof HTMLInputElement) native.select();
+  });
+}
+
+function cancelPathEdit() {
+  pathInput.value = currentPath.value;
+  pathEditMode.value = false;
+}
+
+function onPathEditBlur() {
+  window.setTimeout(() => {
+    if (pathEditMode.value) cancelPathEdit();
+  }, 0);
+}
 
 const uploadDestinationLabel = computed(() => {
   if (!uploadQueue.value.length) return "";
@@ -687,7 +840,7 @@ const filteredRows = computed(() => {
   return rows.value.filter((row) => row.name.toLowerCase().includes(q));
 });
 
-/** Shown when the table has zero rows (empty folder vs no filter matches). */
+// Shown when the table has zero rows (empty folder vs no filter matches).
 const tableNoDataLabel = computed(() => {
   const q = (search.value ?? "").trim();
   if (q && rows.value.length > 0) return "No items match your filter";
@@ -716,7 +869,7 @@ function nameSegmentBaseRule(
   return true;
 }
 
-/** Pass `excludeId` when renaming so the current row does not count as a duplicate. */
+// Pass `excludeId` when renaming so the current row does not count as a duplicate.
 function duplicateNameAmongRowsRule(
   v: string | number | null | undefined,
   excludeId?: string,
@@ -750,7 +903,7 @@ function joinRemotePathSegment(basePath: string, segment: string): string {
   return `${basePath.replace(/\\+$/, "")}\\${segment}`;
 }
 
-/** Parent directory of a full file/folder path (last segment removed). */
+// Parent directory of a full file/folder path (last segment removed).
 function getParentRemotePath(fullPath: string): string {
   const trimmed = fullPath.trim().replace(/[/\\]+$/, "");
   const lastBack = trimmed.lastIndexOf("\\");
@@ -1013,19 +1166,35 @@ function downloadFromContext(row: FileBrowserItem) {
 }
 
 function navigateToPath() {
-  const nextPath = pathInput.value.trim();
-  if (!nextPath || nextPath === currentPath.value) return;
-
+  const nextPath = normalizePathSlashes(pathInput.value);
+  if (!nextPath) {
+    cancelPathEdit();
+    return;
+  }
+  if (pathsEqual(nextPath, currentPath.value)) {
+    pathInput.value = currentPath.value;
+    pathEditMode.value = false;
+    return;
+  }
   setPath(nextPath);
+  pathEditMode.value = false;
 }
 
 function setPath(path: string) {
-  currentPath.value = path;
-  pathInput.value = path;
+  let normalized = normalizePathSlashes(path);
+  const driveRoot = /^([A-Za-z]):\\*$/.exec(normalized);
+  if (driveRoot) {
+    normalized = `${driveRoot[1]}:\\`;
+  } else if (normalized.startsWith("\\\\")) {
+    normalized = normalized.replace(/\\+$/, "");
+  }
+
+  currentPath.value = normalized;
+  pathInput.value = normalized;
   selectedRows.value = [];
 
   history.value = history.value.slice(0, historyIndex.value + 1);
-  history.value.push(path);
+  history.value.push(normalized);
   historyIndex.value = history.value.length - 1;
 
   // Mock refresh for now. Backend will later load rows for this path.
@@ -1034,6 +1203,8 @@ function setPath(path: string) {
 
 function goBack() {
   if (historyIndex.value <= 0) return;
+
+  pathEditMode.value = false;
 
   historyIndex.value -= 1;
   currentPath.value = history.value[historyIndex.value];
@@ -1373,15 +1544,124 @@ function onDrop(event: DragEvent) {
   max-width: 100%;
 }
 
-.folder-path {
+.folder-path.path-bar {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: stretch;
   flex: 1;
   max-width: 720px;
   height: 40px;
+  min-height: 40px;
+  box-sizing: border-box;
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.08);
   padding: 0 6px;
   margin-bottom: 0;
+  min-width: 0;
+  /* Match body2 so breadcrumb labels and path input don’t shift on mode change */
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+}
+
+.min-width-0 {
+  min-width: 0;
+}
+
+.crumb-folder-icon {
+  flex-shrink: 0;
+}
+
+.crumb-path-hitbox {
+  cursor: default;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.crumb-btn:not(:disabled) {
+  cursor: pointer;
+}
+
+.crumb-bar {
+  gap: 0;
+}
+
+.crumb-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  flex: 1 1 auto;
+  scrollbar-width: thin;
+}
+
+.crumb-separator {
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  line-height: 1.25rem;
+  user-select: none;
+  padding: 0 1px;
+  margin: 0 1px;
+  align-self: center;
+}
+
+.crumb-btn {
+  flex-shrink: 0;
+  font-weight: 500;
+  min-height: 0;
+  min-width: unset;
+  border-radius: 6px;
+}
+
+.crumb-btn :deep(.q-btn__wrapper) {
+  padding: 0 3px;
+  min-height: 0;
+}
+
+.crumb-btn :deep(.q-btn__content) {
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.crumb-btn--current,
+.crumb-btn:disabled {
+  opacity: 1;
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.crumb-btn:not(:disabled):hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.crumb-fallback-path {
+  padding-left: 4px;
+}
+
+.path-edit-input {
+  display: flex;
+  align-items: stretch;
+}
+
+.path-edit-input :deep(.q-field) {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+}
+
+.path-edit-input :deep(.q-field__inner) {
+  height: 100%;
+}
+
+.path-edit-input :deep(.q-field__control) {
+  height: 100%;
+  min-height: 0 !important;
+  align-items: center;
+}
+
+.path-edit-input :deep(input) {
+  font-size: inherit;
+  line-height: inherit;
+  padding: 0;
 }
 
 .file-toolbar {
