@@ -278,7 +278,8 @@
         :rows="filteredRows"
         :columns="columns"
         :loading="loading"
-        :pagination="{ rowsPerPage: 0, sortBy: 'type', descending: true }"
+        v-model:pagination="tablePagination"
+        binary-state-sort
         :rows-per-page-options="[0]"
         selection="multiple"
         v-model:selected="selectedRows"
@@ -802,6 +803,77 @@ const rows = ref<FileBrowserItem[]>([
   },
 ]);
 
+const tablePagination = ref({
+  page: 1,
+  rowsPerPage: 0,
+  sortBy: "name",
+  descending: false,
+});
+
+function isFolderRow(row: FileBrowserItem): boolean {
+  return row.type === "folder";
+}
+
+function compareFolderFirst(
+  rowA: FileBrowserItem,
+  rowB: FileBrowserItem,
+): number {
+  const aFolder = isFolderRow(rowA);
+  const bFolder = isFolderRow(rowB);
+  if (aFolder && !bFolder) return -1;
+  if (!aFolder && bFolder) return 1;
+  return 0;
+}
+
+function compareNameAsc(rowA: FileBrowserItem, rowB: FileBrowserItem): number {
+  return rowA.name.localeCompare(rowB.name, undefined, { sensitivity: "base" });
+}
+
+function typeSortLabel(row: FileBrowserItem): string {
+  if (isFolderRow(row)) return "Folder";
+  return (row.extension || "File").toUpperCase();
+}
+
+function parseModifiedToTimestamp(modified?: string): number {
+  if (!modified) return 0;
+  const t = new Date(modified).getTime();
+  return Number.isNaN(t) ? 0 : t;
+}
+
+function parseSizeLabelToBytes(size?: string): number {
+  if (!size || size === "—") return 0;
+  const m = size.trim().match(/^([\d.]+)\s*(B|KB|MB|GB)$/i);
+  if (!m) return 0;
+  const n = parseFloat(m[1]);
+  const unit = m[2].toUpperCase();
+  const mult: Record<string, number> = {
+    B: 1,
+    KB: 1024,
+    MB: 1024 * 1024,
+    GB: 1024 * 1024 * 1024,
+  };
+  return n * (mult[unit] ?? 1);
+}
+
+function makeColumnSort(
+  compareField: (rowA: FileBrowserItem, rowB: FileBrowserItem) => number,
+): (
+  _a: string | undefined,
+  _b: string | undefined,
+  rowA: FileBrowserItem,
+  rowB: FileBrowserItem,
+) => number {
+  return (_a, _b, rowA, rowB) => {
+    const folderCmp = compareFolderFirst(rowA, rowB);
+    if (folderCmp !== 0) return folderCmp;
+
+    const fieldCmp = compareField(rowA, rowB);
+    if (fieldCmp !== 0) return fieldCmp;
+
+    return compareNameAsc(rowA, rowB);
+  };
+}
+
 const columns: QTableColumn<FileBrowserItem>[] = [
   {
     name: "name",
@@ -809,6 +881,8 @@ const columns: QTableColumn<FileBrowserItem>[] = [
     field: "name",
     align: "left",
     sortable: true,
+    sortOrder: "ad",
+    sort: makeColumnSort((a, b) => compareNameAsc(a, b)),
   },
   {
     name: "modified",
@@ -816,6 +890,12 @@ const columns: QTableColumn<FileBrowserItem>[] = [
     field: "modified",
     align: "left",
     sortable: true,
+    sortOrder: "da",
+    sort: makeColumnSort(
+      (a, b) =>
+        parseModifiedToTimestamp(a.modified) -
+        parseModifiedToTimestamp(b.modified),
+    ),
   },
   {
     name: "type",
@@ -823,6 +903,12 @@ const columns: QTableColumn<FileBrowserItem>[] = [
     field: "type",
     align: "left",
     sortable: true,
+    sortOrder: "ad",
+    sort: makeColumnSort((a, b) =>
+      typeSortLabel(a).localeCompare(typeSortLabel(b), undefined, {
+        sensitivity: "base",
+      }),
+    ),
   },
   {
     name: "size",
@@ -830,6 +916,10 @@ const columns: QTableColumn<FileBrowserItem>[] = [
     field: "size",
     align: "left",
     sortable: true,
+    sortOrder: "da",
+    sort: makeColumnSort(
+      (a, b) => parseSizeLabelToBytes(a.size) - parseSizeLabelToBytes(b.size),
+    ),
   },
 ];
 
