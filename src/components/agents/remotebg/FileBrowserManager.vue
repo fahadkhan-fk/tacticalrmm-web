@@ -1776,30 +1776,21 @@ function onDrop(event: DragEvent) {
 }
 
 .file-toolbar :deep(.toolbar-primary-btn) {
-  height: 36px;
+  min-height: 36px;
   border-radius: 4px;
-  padding: 0 14px;
-}
-
-.file-toolbar :deep(.toolbar-primary-btn .q-btn__content) {
-  gap: 6px;
-  justify-content: center;
+  padding: 0 10px;
 }
 
 .file-toolbar :deep(.toolbar-btn) {
   height: 36px;
   border-radius: 4px;
-  padding: 0 14px;
+  padding: 0 10px;
   background: transparent;
   border: 1px solid #ccc;
 }
 
 .file-toolbar :deep(.toolbar-btn:hover) {
   background: rgba(0, 0, 0, 0.04);
-}
-
-.file-toolbar :deep(.toolbar-btn .q-btn__content) {
-  gap: 6px;
 }
 
 .file-toolbar :deep(.toolbar-icon-btn) {
