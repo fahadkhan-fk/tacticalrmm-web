@@ -210,9 +210,15 @@
     </div>
 
     <!-- Upload queue (picker + drag-drop share the same pipeline) -->
-    <div v-if="uploadQueueItems.length" class="upload-queue-section q-mb-sm">
+    <div
+      v-if="uploadQueueItems.length"
+      class="upload-queue-section q-mb-sm"
+      :class="{ 'upload-queue-section--dark': $q.dark.isActive }"
+    >
       <div class="row items-center justify-between q-mb-xs">
-        <div class="text-subtitle2 text-weight-medium">Upload queue</div>
+        <div class="text-subtitle2 text-weight-medium upload-queue-title">
+          Upload queue
+        </div>
         <div class="row items-center q-gutter-xs">
           <q-btn
             dense
@@ -224,11 +230,20 @@
           />
         </div>
       </div>
-      <div class="text-caption text-grey-6 q-mb-sm">
+      <div class="text-caption upload-queue-destination q-mb-sm">
         Destination:
-        <span class="text-grey-4">{{ uploadDestinationLabel }}</span>
+        <span class="upload-queue-destination-path">{{
+          uploadDestinationLabel
+        }}</span>
       </div>
-      <q-list bordered separator dense class="upload-queue-list">
+      <q-list
+        bordered
+        separator
+        dense
+        class="upload-queue-list"
+        :class="{ 'upload-queue-list--dark': $q.dark.isActive }"
+        :dark="$q.dark.isActive"
+      >
         <q-item
           v-for="item in uploadQueueItems"
           :key="item.id"
@@ -238,16 +253,22 @@
             <q-icon name="description" color="primary" size="22px" />
           </q-item-section>
           <q-item-section>
-            <q-item-label class="ellipsis">{{ item.name }}</q-item-label>
-            <q-item-label caption>{{ item.sizeLabel }}</q-item-label>
-            <q-linear-progress
-              :value="item.progress"
-              color="primary"
-              track-color="grey-9"
-              class="q-mt-xs upload-progress"
-              rounded
-              size="6px"
-            />
+            <q-item-label class="ellipsis upload-queue-item-name">{{
+              item.name
+            }}</q-item-label>
+            <q-item-label caption class="upload-queue-item-meta">{{
+              item.sizeLabel
+            }}</q-item-label>
+            <div class="upload-progress-wrap q-mt-xs">
+              <q-linear-progress
+                :value="item.progress"
+                color="primary"
+                :track-color="$q.dark.isActive ? 'grey-8' : 'grey-4'"
+                class="upload-progress"
+                rounded
+                size="6px"
+              />
+            </div>
           </q-item-section>
           <q-item-section side>
             <q-badge
@@ -1630,15 +1651,65 @@ function onDrop(event: DragEvent) {
   border: 1px solid #e0e0e0;
   border-radius: 8px;
   background: #fafafa;
+  color: rgba(0, 0, 0, 0.87);
 }
 
-:global(body.body--dark) .file-browser .upload-queue-section {
-  border-color: rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.02);
+/* Match remote-bg table dark surface (#1d1d1d in App.vue .table-bgcolor-dark) */
+.upload-queue-section--dark {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: #1d1d1d;
+  color: rgba(255, 255, 255, 0.87);
+}
+
+.upload-queue-section--dark .upload-queue-title,
+.upload-queue-section--dark .upload-queue-destination,
+.upload-queue-section--dark .upload-queue-destination-path,
+.upload-queue-section--dark .upload-queue-item-name {
+  color: rgba(255, 255, 255, 0.87);
+}
+
+.upload-queue-destination {
+  color: rgba(0, 0, 0, 0.6);
+}
+
+.upload-queue-section--dark .upload-queue-destination {
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.upload-queue-destination-path {
+  color: rgba(0, 0, 0, 0.87);
 }
 
 .upload-queue-list {
   border-radius: 6px;
+  background: transparent;
+}
+
+.upload-queue-list--dark {
+  background: transparent;
+  color: rgba(255, 255, 255, 0.87);
+}
+
+.upload-queue-list--dark :deep(.q-item) {
+  background: transparent;
+  color: rgba(255, 255, 255, 0.87);
+}
+
+.upload-queue-list--dark :deep(.q-item__label--caption),
+.upload-queue-section--dark .upload-queue-item-meta {
+  color: rgba(255, 255, 255, 0.55) !important;
+}
+
+.upload-queue-list--dark :deep(.q-list--bordered) {
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.upload-queue-list--dark :deep(.q-separator) {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.upload-queue-item :deep(.q-item__section--main) {
+  min-width: 0;
 }
 
 .upload-queue-item :deep(.q-item__section--side) {
@@ -1646,8 +1717,21 @@ function onDrop(event: DragEvent) {
   align-items: flex-end;
 }
 
+/* Prevent flex stretch from turning the progress bar into a thick block */
+.upload-progress-wrap {
+  flex: 0 0 auto;
+  width: 100%;
+  height: 6px;
+}
+
 .upload-progress {
-  max-width: 100%;
+  width: 100%;
+  height: 6px;
+}
+
+.upload-progress :deep(.q-linear-progress) {
+  height: 6px !important;
+  font-size: 6px;
 }
 
 .folder-path.path-bar {
