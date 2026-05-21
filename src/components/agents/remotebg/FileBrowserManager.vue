@@ -1,13 +1,14 @@
 <template>
   <div
     class="file-browser column q-pa-sm"
+    :class="{ 'file-browser--dark': $q.dark.isActive }"
     @dragenter.prevent="onDragEnter"
     @dragover.prevent="onDragOver"
     @dragleave.prevent="onDragLeave"
     @drop.prevent="onDrop"
   >
     <!-- Path / Breadcrumb Row -->
-    <div class="row items-center q-mb-md file-path-row">
+    <div class="row items-center q-mb-sm file-path-row">
       <q-btn
         dense
         flat
@@ -45,10 +46,7 @@
                 v-for="(seg, idx) in breadcrumbSegments"
                 :key="`${idx}-${seg.fullPath}`"
               >
-                <span
-                  v-if="idx > 0"
-                  class="crumb-separator text-grey-6"
-                  aria-hidden="true"
+                <span v-if="idx > 0" class="crumb-separator" aria-hidden="true"
                   >&gt;</span
                 >
                 <q-btn
@@ -67,7 +65,7 @@
               </template>
               <span
                 v-if="breadcrumbSegments.length === 0 && currentPath.trim()"
-                class="text-grey-7 ellipsis col crumb-fallback-path"
+                class="ellipsis col crumb-fallback-path"
                 >{{ currentPath }}</span
               >
             </div>
@@ -103,10 +101,12 @@
         <!-- Primary CTA -->
         <q-btn
           dense
+          unelevated
+          no-caps
           color="primary"
           icon="upload"
           label="Upload"
-          class="toolbar-primary-btn"
+          class="toolbar-btn toolbar-primary-btn"
           :disable="!hasUploadPath"
           @click="openFilePicker"
         />
@@ -191,19 +191,21 @@
           dense
           outlined
           clearable
+          hide-bottom-space
+          class="toolbar-search"
           placeholder="Filter by name in this folder"
-          style="width: 280px"
+          :dark="$q.dark.isActive"
         >
           <template #prepend>
-            <q-icon name="search" />
+            <q-icon name="search" size="18px" />
           </template>
         </q-input>
 
         <q-btn
           dense
-          outline
+          unelevated
           icon="refresh"
-          class="toolbar-icon-btn"
+          class="toolbar-btn toolbar-icon-btn"
           @click="refresh"
         />
       </div>
@@ -299,12 +301,11 @@
         dense
         virtual-scroll
         row-key="id"
-        class="remote-bg-tbl-sticky"
+        class="remote-bg-tbl-sticky file-browser-table file-browser-table--fill"
         :table-class="{
           'table-bgcolor': !$q.dark.isActive,
           'table-bgcolor-dark': $q.dark.isActive,
         }"
-        :style="{ maxHeight: tableMaxHeight }"
         :rows="filteredRows"
         :columns="columns"
         :loading="loading"
@@ -318,7 +319,7 @@
         <template #body="props">
           <q-tr
             :props="props"
-            class="cursor-pointer"
+            class="cursor-pointer file-table-row"
             @dblclick="onRowDoubleClick(props.row)"
           >
             <q-menu
@@ -593,7 +594,6 @@ import { copyToClipboard, QInput, type QTableColumn, useQuasar } from "quasar";
 
 const $q = useQuasar();
 
-const tableMaxHeight = computed(() => `${$q.screen.height - 120}px`);
 import {
   notifyError,
   notifyInfo,
@@ -1639,8 +1639,62 @@ function onDrop(event: DragEvent) {
 }
 
 .file-table-wrap {
-  min-height: 0;
+  display: flex;
+  flex-direction: column;
   flex: 1 1 auto;
+  min-height: 0;
+  height: 0;
+  overflow: hidden;
+}
+
+.file-table-wrap :deep(.file-browser-table--fill) {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100% !important;
+  max-height: 100% !important;
+  display: flex;
+  flex-direction: column;
+}
+
+.file-table-wrap :deep(.file-browser-table--fill .q-table__middle) {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.file-table-wrap :deep(.file-browser-table--fill .q-table__bottom) {
+  flex: 0 0 auto;
+}
+
+.file-table-wrap :deep(.file-table-row:hover > td) {
+  background: rgba(0, 0, 0, 0.045) !important;
+}
+
+.file-browser--dark .file-table-wrap :deep(.file-table-row:hover > td) {
+  background: rgba(255, 255, 255, 0.07) !important;
+}
+
+.file-table-wrap :deep(.file-browser-table tbody td) {
+  height: auto;
+  min-height: 32px;
+  padding-top: 5px;
+  padding-bottom: 5px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.14) !important;
+}
+
+.file-browser--dark .file-table-wrap :deep(.file-browser-table tbody td) {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.14) !important;
+}
+
+.file-table-wrap :deep(.file-browser-table thead tr th) {
+  height: auto;
+  min-height: 34px;
+  padding-top: 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.16) !important;
+}
+
+.file-browser--dark .file-table-wrap :deep(.file-browser-table thead tr th) {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.16) !important;
 }
 
 .upload-queue-section {
@@ -1654,7 +1708,6 @@ function onDrop(event: DragEvent) {
   color: rgba(0, 0, 0, 0.87);
 }
 
-/* Match remote-bg table dark surface (#1d1d1d in App.vue .table-bgcolor-dark) */
 .upload-queue-section--dark {
   border-color: rgba(255, 255, 255, 0.12);
   background: #1d1d1d;
@@ -1717,7 +1770,6 @@ function onDrop(event: DragEvent) {
   align-items: flex-end;
 }
 
-/* Prevent flex stretch from turning the progress bar into a thick block */
 .upload-progress-wrap {
   flex: 0 0 auto;
   width: 100%;
@@ -1745,16 +1797,20 @@ function onDrop(event: DragEvent) {
   min-height: 40px;
   box-sizing: border-box;
   border: 1px solid #ccc;
+  background: transparent;
   padding: 0 6px;
   border-radius: 8px;
   margin-bottom: 0;
   min-width: 0;
   font-size: 0.875rem;
   line-height: 1.25rem;
+  color: rgba(0, 0, 0, 0.75);
 }
 
-:global(body.body--dark) .file-browser .folder-path.path-bar {
-  border-color: rgba(255, 255, 255, 0.2);
+.file-browser--dark .folder-path.path-bar {
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.16);
+  color: rgba(255, 255, 255, 0.78);
 }
 
 .min-width-0 {
@@ -1792,9 +1848,14 @@ function onDrop(event: DragEvent) {
   font-size: 0.75rem;
   line-height: 1.25rem;
   user-select: none;
-  padding: 0 1px;
-  margin: 0 1px;
+  padding: 0 2px;
+  margin: 0 2px;
   align-self: center;
+  color: rgba(0, 0, 0, 0.45);
+}
+
+.file-browser--dark .crumb-separator {
+  color: rgba(255, 255, 255, 0.45);
 }
 
 .crumb-btn {
@@ -1820,8 +1881,22 @@ function onDrop(event: DragEvent) {
   opacity: 1;
 }
 
+.file-browser--dark .crumb-btn :deep(.q-btn__content) {
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.file-browser--dark .crumb-btn--current :deep(.q-btn__content) {
+  color: #fff;
+  font-weight: 600;
+}
+
+.file-browser--dark .crumb-fallback-path {
+  color: rgba(255, 255, 255, 0.78);
+}
+
 .crumb-fallback-path {
   padding-left: 4px;
+  color: rgba(0, 0, 0, 0.65);
 }
 
 .path-edit-input {
@@ -1852,53 +1927,145 @@ function onDrop(event: DragEvent) {
 }
 
 .file-toolbar {
-  padding: 0 0 14px 0;
+  padding: 0 0 12px 0;
+  gap: 12px;
 }
 
 .file-toolbar :deep(.q-btn) {
   text-transform: none !important;
 }
 
+.file-toolbar :deep(.toolbar-btn),
 .file-toolbar :deep(.toolbar-primary-btn) {
-  min-height: 36px;
-  border-radius: 4px;
-  padding: 0 10px;
+  height: 32px;
+  min-height: 32px;
+  max-height: 32px;
+  border-radius: 6px;
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.25;
 }
 
-.file-toolbar :deep(.toolbar-btn) {
-  height: 36px;
-  border-radius: 4px;
-  padding: 0 10px;
-  background: transparent;
-  border: 1px solid #ccc;
+.file-toolbar :deep(.toolbar-btn .q-btn__wrapper),
+.file-toolbar :deep(.toolbar-primary-btn .q-btn__wrapper) {
+  min-height: 32px;
+  padding: 0 12px;
 }
 
-.file-toolbar :deep(.toolbar-btn:hover) {
-  background: rgba(0, 0, 0, 0.04);
+.file-toolbar :deep(.toolbar-btn .q-btn__content),
+.file-toolbar :deep(.toolbar-primary-btn .q-btn__content) {
+  font-size: 13px;
+  line-height: 1.25;
+}
+
+.file-toolbar :deep(.toolbar-btn .q-icon),
+.file-toolbar :deep(.toolbar-primary-btn .q-icon) {
+  font-size: 18px;
+}
+
+.file-toolbar :deep(.toolbar-btn:not(.toolbar-primary-btn)) {
+  background: #fff;
+  border: 1px solid #d0d0d0;
+  color: rgba(0, 0, 0, 0.87);
+}
+
+.file-toolbar :deep(.toolbar-primary-btn) {
+  border: none;
+}
+
+.file-toolbar :deep(.toolbar-btn:not(.toolbar-primary-btn):hover) {
+  background: #f0f0f0;
+}
+
+.file-toolbar :deep(.toolbar-btn.q-btn--disabled) {
+  opacity: 0.45;
+}
+
+.file-toolbar :deep(.toolbar-primary-btn.q-btn--disabled) {
+  opacity: 0.55;
 }
 
 .file-toolbar :deep(.toolbar-icon-btn) {
-  width: 36px;
-  height: 36px;
+  width: 32px;
+  min-width: 32px;
+  padding: 0;
 }
 
-.file-toolbar :deep(.toolbar-icon-btn::before) {
-  border: 1px solid #ccc !important;
+.file-toolbar :deep(.toolbar-icon-btn .q-btn__content) {
+  padding: 0;
 }
 
-:global(body.body--dark) .file-browser .file-toolbar :deep(.toolbar-btn) {
-  border-color: rgba(255, 255, 255, 0.2);
+.file-toolbar :deep(.toolbar-search) {
+  width: 260px;
 }
 
-:global(body.body--dark) .file-browser .file-toolbar :deep(.toolbar-btn:hover) {
+.file-toolbar :deep(.toolbar-search .q-field__control) {
+  min-height: 32px;
+  height: 32px;
+  border-radius: 6px;
+  background: #fff;
+  align-items: center;
+}
+
+.file-toolbar :deep(.toolbar-search .q-field__control:before) {
+  border-color: #d0d0d0;
+}
+
+.file-toolbar :deep(.toolbar-search .q-field__prepend) {
+  height: 32px;
+  padding-right: 6px;
+  align-self: center;
+}
+
+.file-toolbar :deep(.toolbar-search .q-field__prepend .q-icon) {
+  font-size: 18px;
+}
+
+.file-toolbar :deep(.toolbar-search .q-field__native) {
+  min-height: 32px;
+  line-height: 32px;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.file-browser--dark
+  .file-toolbar
+  :deep(.toolbar-btn:not(.toolbar-primary-btn)) {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.16);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.file-browser--dark
+  .file-toolbar
+  :deep(.toolbar-btn:not(.toolbar-primary-btn):hover) {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.file-browser--dark .file-toolbar :deep(.toolbar-btn.q-btn--disabled) {
+  opacity: 0.38;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.file-browser--dark .file-toolbar :deep(.toolbar-search .q-field__control) {
   background: rgba(255, 255, 255, 0.06);
 }
 
-:global(body.body--dark)
-  .file-browser
+.file-browser--dark
   .file-toolbar
-  :deep(.toolbar-icon-btn::before) {
-  border-color: rgba(255, 255, 255, 0.2) !important;
+  :deep(.toolbar-search .q-field__control:before) {
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.file-browser--dark .file-toolbar :deep(.toolbar-search input) {
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.file-browser--dark
+  .file-toolbar
+  :deep(.toolbar-search .q-field__native::placeholder) {
+  color: rgba(255, 255, 255, 0.45);
 }
 
 .file-path-row {
@@ -1910,6 +2077,8 @@ function onDrop(event: DragEvent) {
   height: 40px;
   border: 1px solid #ccc;
   border-radius: 0;
+  background: transparent;
+  color: rgba(0, 0, 0, 0.7);
 }
 
 .file-path-row :deep(.nav-btn:first-of-type) {
@@ -1921,8 +2090,14 @@ function onDrop(event: DragEvent) {
   margin-right: 12px;
 }
 
-:global(body.body--dark) .file-browser .file-path-row :deep(.nav-btn) {
-  border-color: rgba(255, 255, 255, 0.2);
+.file-path-row :deep(.nav-btn.q-btn--disabled) {
+  opacity: 0.4;
+}
+
+.file-browser--dark .file-path-row :deep(.nav-btn) {
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.16);
+  color: rgba(255, 255, 255, 0.75);
 }
 
 .delete-confirm-card {
