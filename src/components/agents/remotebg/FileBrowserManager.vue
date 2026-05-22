@@ -316,6 +316,10 @@
         v-model:selected="selectedRows"
         :no-data-label="tableNoDataLabel"
       >
+        <template #header-selection="scope">
+          <q-checkbox v-model="scope.selected" dense size="xs" />
+        </template>
+
         <template #body="props">
           <q-tr
             :props="props"
@@ -400,7 +404,7 @@
             </q-menu>
 
             <q-td auto-width>
-              <q-checkbox v-model="props.selected" dense />
+              <q-checkbox v-model="props.selected" dense size="xs" />
             </q-td>
 
             <q-td key="name" :props="props">
