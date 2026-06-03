@@ -39,7 +39,14 @@
     <q-separator />
     <q-tab-panels v-model="tab">
       <q-tab-panel name="terminal" class="q-pa-none">
+        <TerminalManager
+          v-if="terminalMode === 'new'"
+          :agent_id="agent_id"
+          :agentPlatform="$route.query.agentPlatform"
+          :terminalDefaults="terminalDefaults"
+        />
         <iframe
+          v-else
           allow="clipboard-read; clipboard-write"
           :src="terminal"
           :style="{
@@ -99,7 +106,10 @@
 import { ref, computed, onMounted } from "vue";
 import { useRoute } from "vue-router";
 import { useQuasar, useMeta } from "quasar";
-import { fetchAgentMeshCentralURLs } from "@/api/agents";
+import {
+  fetchAgentMeshCentralURLs,
+  fetchAgentTerminalDefaults,
+} from "@/api/agents";
 import { fetchDashboardInfo } from "@/api/core";
 
 // ui imports
@@ -109,6 +119,7 @@ import EventLogManager from "@/components/agents/remotebg/EventLogManager.vue";
 import RegistryManager from "@/components/agents/remotebg/RegistryManager.vue";
 import FileBrowserManager from "@/components/agents/remotebg/FileBrowserManager.vue";
 import registryIcon from "../assets/windows-registry.png";
+import TerminalManager from "@/components/agents/remotebg/TerminalManager.vue";
 
 export default {
   name: "RemoteBackground",
@@ -118,6 +129,7 @@ export default {
     ProcessManager,
     RegistryManager,
     FileBrowserManager,
+    TerminalManager,
   },
   setup() {
     // setup quasar
@@ -130,6 +142,8 @@ export default {
     const terminal = ref("");
     const file = ref("");
     const tab = ref("terminal");
+    const terminalMode = ref("legacy");
+    const terminalDefaults = ref(null);
 
     const agent_id = computed(() => params.agent_id);
 
@@ -148,10 +162,44 @@ export default {
       $q.loadingBar.setDefaults({ size: "0px" });
     }
 
+    async function getTerminalDefaults() {
+      try {
+        const data = await fetchAgentTerminalDefaults(params.agent_id);
+        terminalDefaults.value = data;
+
+        // TODO remove this after a few releases as all agents should be updated by then
+        const wantsNewTerminal = data?.terminal_mode === "new";
+        const supportsNewTerminal = data?.supports_new_terminal === true;
+
+        if (wantsNewTerminal && !supportsNewTerminal) {
+          terminalMode.value = "legacy";
+
+          $q.notify({
+            type: "warning",
+            message:
+              "New terminal mode requires agent version 2.11.0 or higher. Reverting to legacy terminal mode. Please update the agent to use the new terminal.",
+            timeout: 6000,
+          });
+          return;
+        }
+
+        terminalMode.value = wantsNewTerminal ? "new" : "legacy";
+      } catch (e) {
+        terminalMode.value = "legacy";
+
+        $q.notify({
+          type: "negative",
+          message:
+            e?.response?.data?.detail || "Failed to load terminal settings",
+        });
+      }
+    }
+
     // vue lifecycle hooks
     onMounted(() => {
       getDashInfo();
       getMeshURLs();
+      getTerminalDefaults();
     });
 
     return {
@@ -161,6 +209,8 @@ export default {
       tab,
       agent_id,
       registryIcon,
+      terminalMode,
+      terminalDefaults,
     };
   },
 };
