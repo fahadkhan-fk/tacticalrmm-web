@@ -58,7 +58,7 @@ export function parseSizeLabelToBytes(size?: string): number {
 export function defaultFileBrowserRootPath(platform: string): string {
   switch (platform) {
     case "windows":
-      return "C:\\Users\\Public\\Documents";
+      return "C:\\Users\\Public";
     case "darwin":
       return "/Users";
     case "linux":
