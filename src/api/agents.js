@@ -408,3 +408,60 @@ export async function fetchAgentTerminalDefaults(agent_id) {
     throw e;
   }
 }
+
+export const FILE_BROWSER_DEFAULT_PAGE_SIZE = 500;
+
+export async function fetchAgentFiles(
+  agent_id,
+  path,
+  page = 1,
+  pageSize = FILE_BROWSER_DEFAULT_PAGE_SIZE,
+) {
+  try {
+    const { data } = await axios.get(`${baseUrl}/${agent_id}/files/`, {
+      params: { path, page, page_size: pageSize },
+    });
+    return data;
+  } catch (e) {
+    console.error(e);
+    throw e;
+  }
+}
+
+export async function fetchAgentFilesAll(
+  agent_id,
+  path,
+  pageSize = FILE_BROWSER_DEFAULT_PAGE_SIZE,
+) {
+  let page = 1;
+  let combinedItems = [];
+  let lastResponse = null;
+
+  while (true) {
+    const data = await fetchAgentFiles(agent_id, path, page, pageSize);
+    lastResponse = data;
+    combinedItems = combinedItems.concat(data.items ?? []);
+    if (!data.has_more) break;
+    page += 1;
+  }
+
+  if (!lastResponse) {
+    return {
+      path,
+      items: [],
+      has_more: false,
+      page: 1,
+      page_size: pageSize,
+      total: 0,
+    };
+  }
+
+  return {
+    ...lastResponse,
+    items: combinedItems,
+    has_more: false,
+    page: 1,
+    page_size: pageSize,
+    total: combinedItems.length,
+  };
+}
