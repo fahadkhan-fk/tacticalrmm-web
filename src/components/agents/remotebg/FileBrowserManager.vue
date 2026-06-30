@@ -10,6 +10,7 @@
     <FileBrowserPathBar
       :current-path="currentPath"
       :can-go-back="historyIndex > 0"
+      :agent-platform="agentPlatform"
       @back="goBack"
       @navigate="setPath"
     />
@@ -93,9 +94,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { copyToClipboard, useQuasar } from "quasar";
 
+import { fetchAgentFilesAll } from "@/api/agents";
 import FileBrowserNewFolderModal from "@/components/agents/remotebg/FileBrowserNewFolderModal.vue";
 import FileBrowserPathBar from "@/components/agents/remotebg/FileBrowserPathBar.vue";
 import FileBrowserPropertiesDialog from "@/components/agents/remotebg/FileBrowserPropertiesDialog.vue";
@@ -113,11 +115,15 @@ import {
 import type { FileBrowserItem, UploadQueueItem } from "@/types/filebrowser";
 import { bytes2Human } from "@/utils/format";
 import {
-  createMockFileBrowserRows,
+  defaultFileBrowserRootPath,
   extensionFromFileName,
   fileListToArray,
   formatMockListTimestamp,
+  getListFilesErrorMessage,
   isFileDrag,
+  isListFilesAgentOfflineError,
+  isListFilesPermissionError,
+  mapApiItemsToFileBrowserItems,
   mockDownloadFileName,
 } from "@/utils/filebrowser";
 import {
@@ -127,23 +133,34 @@ import {
   notifyWarning,
 } from "@/utils/notify";
 
-defineProps<{
-  agent_id: string;
-}>();
+const props = withDefaults(
+  defineProps<{
+    agent_id: string;
+    agentPlatform?: string;
+  }>(),
+  {
+    agentPlatform: "windows",
+  },
+);
 
 const $q = useQuasar();
-const { joinRemotePathSegment, normalizeNavPath, replacePathLastSegment } =
-  useFileBrowser();
+const {
+  joinRemotePathSegment,
+  normalizeNavPath,
+  replacePathLastSegment,
+  pathsEqual,
+} = useFileBrowser(() => props.agentPlatform);
 
 const loading = ref(false);
-const currentPath = ref("C:\\Users\\Public\\Documents");
+const listError = ref<string | null>(null);
+const currentPath = ref("");
 const search = ref("");
 const selectedRows = ref<FileBrowserItem[]>([]);
 const isDragging = ref(false);
 const dragCounter = ref(0);
 const isFileDragSession = ref(false);
 
-const history = ref<string[]>([currentPath.value]);
+const history = ref<string[]>([]);
 const historyIndex = ref(0);
 
 const propertiesDialog = ref(false);
@@ -161,11 +178,12 @@ const fileInputRef = ref<HTMLInputElement | null>(null);
 const uploadQueue = ref<UploadQueueItem[]>([]);
 let uploadIdSeq = 0;
 let newFolderRowIdSeq = 100;
+let loadSeq = 0;
 
 const uploadQueueItems = computed<UploadQueueItem[]>(() => uploadQueue.value);
 const hasUploadPath = computed(() => currentPath.value.trim().length > 0);
 
-const rows = ref<FileBrowserItem[]>(createMockFileBrowserRows());
+const rows = ref<FileBrowserItem[]>([]);
 
 const rowNames = computed(() => rows.value.map((r) => r.name));
 
@@ -183,10 +201,74 @@ const filteredRows = computed(() => {
 });
 
 const tableNoDataLabel = computed(() => {
+  if (listError.value) return listError.value;
   const q = (search.value ?? "").trim();
   if (q && rows.value.length > 0) return "No items match your filter";
   return "Folder is empty";
 });
+
+function resetNavigationHistory(path: string) {
+  history.value = [path];
+  historyIndex.value = 0;
+}
+
+function initializeRootPath() {
+  const root = defaultFileBrowserRootPath(props.agentPlatform);
+  currentPath.value = root;
+  resetNavigationHistory(root);
+}
+
+async function refresh() {
+  const path = currentPath.value.trim();
+  if (!path) {
+    listError.value = "Path is required";
+    rows.value = [];
+    return;
+  }
+
+  const seq = ++loadSeq;
+  loading.value = true;
+  listError.value = null;
+  selectedRows.value = [];
+
+  try {
+    const data = await fetchAgentFilesAll(props.agent_id, path);
+    if (seq !== loadSeq) return;
+
+    currentPath.value = data.path || path;
+    rows.value = mapApiItemsToFileBrowserItems(data.items ?? []);
+    listError.value = null;
+  } catch (err: unknown) {
+    if (seq !== loadSeq) return;
+
+    rows.value = [];
+    const message = getListFilesErrorMessage(err);
+    listError.value = message;
+
+    if (isListFilesPermissionError(err)) {
+      notifyError(message);
+    } else if (isListFilesAgentOfflineError(message)) {
+      notifyWarning(message);
+    }
+  } finally {
+    if (seq === loadSeq) {
+      loading.value = false;
+    }
+  }
+}
+
+onMounted(() => {
+  initializeRootPath();
+  void refresh();
+});
+
+watch(
+  () => [props.agent_id, props.agentPlatform] as const,
+  () => {
+    initializeRootPath();
+    void refresh();
+  },
+);
 
 watch(
   filteredRows,
@@ -362,6 +444,15 @@ function downloadFromContext(row: FileBrowserItem) {
 
 function setPath(path: string) {
   const normalized = normalizeNavPath(path);
+  if (!normalized) {
+    notifyWarning("Enter a valid path.");
+    return;
+  }
+
+  if (pathsEqual(normalized, currentPath.value)) {
+    void refresh();
+    return;
+  }
 
   currentPath.value = normalized;
   selectedRows.value = [];
@@ -370,7 +461,7 @@ function setPath(path: string) {
   history.value.push(normalized);
   historyIndex.value = history.value.length - 1;
 
-  refresh();
+  void refresh();
 }
 
 function goBack() {
@@ -379,16 +470,7 @@ function goBack() {
   historyIndex.value -= 1;
   currentPath.value = history.value[historyIndex.value];
   selectedRows.value = [];
-}
-
-function refresh() {
-  loading.value = true;
-  selectedRows.value = [];
-
-  // TODO: await directory reload for `currentPath` (agent/filesystem API).
-  window.setTimeout(() => {
-    loading.value = false;
-  }, 350);
+  void refresh();
 }
 
 function onRowDoubleClick(row: FileBrowserItem) {
@@ -396,6 +478,7 @@ function onRowDoubleClick(row: FileBrowserItem) {
 }
 
 function openFolder(row: FileBrowserItem) {
+  if (row.type !== "folder") return;
   setPath(row.path);
 }
 

@@ -92,6 +92,7 @@ import type { BreadcrumbSegment } from "@/types/filebrowser";
 const props = defineProps<{
   currentPath: string;
   canGoBack: boolean;
+  agentPlatform?: string;
 }>();
 
 const emit = defineEmits<{
@@ -100,7 +101,7 @@ const emit = defineEmits<{
 }>();
 
 const { parsePathToBreadcrumbs, pathsEqual, normalizePathSlashes } =
-  useFileBrowser();
+  useFileBrowser(() => props.agentPlatform ?? "windows");
 
 const pathEditMode = ref(false);
 const pathInput = ref(props.currentPath);

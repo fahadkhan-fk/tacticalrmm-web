@@ -79,8 +79,10 @@
         />
       </q-tab-panel>
       <q-tab-panel name="filebrowser" class="q-pa-none">
-        <!-- NEW UI (for development) -->
-        <FileBrowserManager :agent_id="agent_id" />
+        <FileBrowserManager
+          :agent_id="agent_id"
+          :agent-platform="String($route.query.agentPlatform || 'windows')"
+        />
         <!-- <iframe
           allow="clipboard-read; clipboard-write"
           :src="file"
