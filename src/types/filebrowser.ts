@@ -37,6 +37,33 @@ export interface FileBrowserItem {
   modified?: string;
   created?: string;
   accessed?: string;
+  hidden?: boolean;
+  system?: boolean;
+  readonly?: boolean;
+}
+
+export interface FileBrowserApiItem {
+  id: string;
+  name: string;
+  path: string;
+  type: FileBrowserItemType;
+  extension?: string;
+  size: string;
+  modified: string;
+  created: string;
+  accessed: string;
+  hidden?: boolean;
+  system?: boolean;
+  readonly?: boolean;
+}
+
+export interface FileBrowserDirectoryResponse {
+  path: string;
+  items: FileBrowserApiItem[];
+  has_more: boolean;
+  page: number;
+  page_size: number;
+  total: number;
 }
 
 export interface BreadcrumbSegment {

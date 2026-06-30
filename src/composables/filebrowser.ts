@@ -1,9 +1,19 @@
+import { computed, type MaybeRef, unref } from "vue";
 import { uid } from "quasar";
 
 import type { QTreeFileNode } from "../types/filebrowser";
 import type { BreadcrumbSegment } from "../types/filebrowser";
 
-export function useFileBrowser() {
+function isWindowsPlatform(platform: string): boolean {
+  return platform === "windows";
+}
+
+export function useFileBrowser(platform: MaybeRef<string> = "windows") {
+  const isWindows = computed(() => isWindowsPlatform(unref(platform)));
+  const pathSeparator = computed<"/" | "\\">(() =>
+    isWindows.value ? "\\" : "/",
+  );
+
   function createFileNode(
     name: string,
     path: string,
@@ -39,36 +49,47 @@ export function useFileBrowser() {
     };
   }
 
-  function getFile(path: string, separator: "/" | "\\" = "/"): string {
-    const file = path.split(separator).pop();
+  function getFile(path: string, separator?: "/" | "\\"): string {
+    const sep = separator ?? pathSeparator.value;
+    const file = path.split(sep).pop();
     return file ? file : "";
   }
 
-  function getPath(path: string, separator: "/" | "\\" = "/"): string {
-    const pathArray = path.split(separator);
+  function getPath(path: string, separator?: "/" | "\\"): string {
+    const sep = separator ?? pathSeparator.value;
+    const pathArray = path.split(sep);
     pathArray.pop();
-    return pathArray.join(separator);
+    return pathArray.join(sep);
   }
 
   function normalizePathSlashes(p: string): string {
-    return p.trim().replace(/\//g, "\\");
+    const trimmed = p.trim();
+    if (isWindows.value) {
+      return trimmed.replace(/\//g, "\\");
+    }
+    return trimmed.replace(/\\/g, "/");
   }
 
   function pathKeyForCompare(p: string): string {
     const s = normalizePathSlashes(p);
-    const driveOnly = /^([A-Za-z]:)\\*$/.exec(s);
-    if (driveOnly) return `${driveOnly[1].toLowerCase()}\\`;
-    if (s.startsWith("\\\\")) {
+    if (isWindows.value) {
+      const driveOnly = /^([A-Za-z]:)\\*$/.exec(s);
+      if (driveOnly) return `${driveOnly[1].toLowerCase()}\\`;
+      if (s.startsWith("\\\\")) {
+        return s.replace(/\\+$/, "").toLowerCase();
+      }
       return s.replace(/\\+$/, "").toLowerCase();
     }
-    return s.replace(/\\+$/, "").toLowerCase();
+
+    if (s === "/") return "/";
+    return s.replace(/\/+$/, "").toLowerCase();
   }
 
   function pathsEqual(a: string, b: string): boolean {
     return pathKeyForCompare(a) === pathKeyForCompare(b);
   }
 
-  function parsePathToBreadcrumbs(raw: string): BreadcrumbSegment[] {
+  function parseWindowsPathToBreadcrumbs(raw: string): BreadcrumbSegment[] {
     const normalized = normalizePathSlashes(raw);
     if (!normalized) return [];
 
@@ -105,8 +126,30 @@ export function useFileBrowser() {
     }));
   }
 
+  function parseUnixPathToBreadcrumbs(raw: string): BreadcrumbSegment[] {
+    const normalized = normalizePathSlashes(raw);
+    if (!normalized || normalized === "/") {
+      return [{ label: "/", fullPath: "/" }];
+    }
+
+    const parts = normalized.split("/").filter(Boolean);
+    return parts.map((label, i) => ({
+      label,
+      fullPath: "/" + parts.slice(0, i + 1).join("/"),
+    }));
+  }
+
+  function parsePathToBreadcrumbs(raw: string): BreadcrumbSegment[] {
+    if (isWindows.value) {
+      return parseWindowsPathToBreadcrumbs(raw);
+    }
+    return parseUnixPathToBreadcrumbs(raw);
+  }
+
   function joinRemotePathSegment(basePath: string, segment: string): string {
-    return `${basePath.replace(/\\+$/, "")}\\${segment}`;
+    const sep = pathSeparator.value;
+    const base = basePath.replace(sep === "\\" ? /[\\/]+$/ : /[/\\]+$/, "");
+    return `${base}${sep}${segment}`;
   }
 
   function getParentRemotePath(fullPath: string): string {
@@ -127,16 +170,26 @@ export function useFileBrowser() {
 
   function normalizeNavPath(path: string): string {
     let normalized = normalizePathSlashes(path);
-    const driveRoot = /^([A-Za-z]):\\*$/.exec(normalized);
-    if (driveRoot) {
-      normalized = `${driveRoot[1]}:\\`;
-    } else if (normalized.startsWith("\\\\")) {
-      normalized = normalized.replace(/\\+$/, "");
+    if (isWindows.value) {
+      const driveRoot = /^([A-Za-z]):\\*$/.exec(normalized);
+      if (driveRoot) {
+        normalized = `${driveRoot[1]}:\\`;
+      } else if (normalized.startsWith("\\\\")) {
+        normalized = normalized.replace(/\\+$/, "");
+      }
+      return normalized;
     }
-    return normalized;
+
+    if (!normalized) return "/";
+    if (normalized !== "/") {
+      normalized = normalized.replace(/\/+$/, "");
+    }
+    return normalized || "/";
   }
 
   return {
+    isWindows,
+    pathSeparator,
     createFolderNode,
     createFileNode,
     getFile,

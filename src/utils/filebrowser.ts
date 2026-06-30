@@ -1,4 +1,6 @@
-import type { FileBrowserItem } from "@/types/filebrowser";
+import type { FileBrowserApiItem, FileBrowserItem } from "@/types/filebrowser";
+import { bytes2Human, formatDate } from "@/utils/format";
+import { AxiosError } from "axios";
 
 export function isFolderRow(row: FileBrowserItem): boolean {
   return row.type === "folder";
@@ -35,17 +37,101 @@ export function parseModifiedToTimestamp(modified?: string): number {
 
 export function parseSizeLabelToBytes(size?: string): number {
   if (!size || size === "—") return 0;
-  const m = size.trim().match(/^([\d.]+)\s*(B|KB|MB|GB)$/i);
-  if (!m) return 0;
-  const n = parseFloat(m[1]);
-  const unit = m[2].toUpperCase();
-  const mult: Record<string, number> = {
-    B: 1,
-    KB: 1024,
-    MB: 1024 * 1024,
-    GB: 1024 * 1024 * 1024,
+  const trimmed = size.trim();
+  const m = trimmed.match(/^([\d.]+)\s*(B|KB|MB|GB|TB)$/i);
+  if (m) {
+    const n = parseFloat(m[1]);
+    const unit = m[2].toUpperCase();
+    const mult: Record<string, number> = {
+      B: 1,
+      KB: 1024,
+      MB: 1024 * 1024,
+      GB: 1024 * 1024 * 1024,
+      TB: 1024 * 1024 * 1024 * 1024,
+    };
+    return n * (mult[unit] ?? 1);
+  }
+  const raw = parseInt(trimmed, 10);
+  return Number.isFinite(raw) && raw >= 0 ? raw : 0;
+}
+
+export function defaultFileBrowserRootPath(platform: string): string {
+  switch (platform) {
+    case "windows":
+      return "C:\\Users\\Public\\Documents";
+    case "darwin":
+      return "/Users";
+    case "linux":
+    default:
+      return "/";
+  }
+}
+
+export function formatFileBrowserTimestamp(iso?: string): string {
+  if (!iso) return "";
+  return formatDate(iso, "YYYY-MM-DD h:mm A");
+}
+
+export function mapApiItemToFileBrowserItem(
+  raw: FileBrowserApiItem,
+): FileBrowserItem {
+  const item: FileBrowserItem = {
+    id: raw.id || raw.path,
+    name: raw.name,
+    path: raw.path,
+    type: raw.type,
+    modified: formatFileBrowserTimestamp(raw.modified),
+    created: formatFileBrowserTimestamp(raw.created),
+    accessed: formatFileBrowserTimestamp(raw.accessed),
+    hidden: raw.hidden,
+    system: raw.system,
+    readonly: raw.readonly,
   };
-  return n * (mult[unit] ?? 1);
+
+  if (raw.extension) {
+    item.extension = raw.extension;
+  }
+
+  if (raw.type === "file") {
+    const bytes = parseInt(raw.size, 10);
+    item.size = Number.isFinite(bytes) && bytes >= 0 ? bytes2Human(bytes) : "—";
+  }
+
+  return item;
+}
+
+export function mapApiItemsToFileBrowserItems(
+  items: FileBrowserApiItem[],
+): FileBrowserItem[] {
+  return items.map(mapApiItemToFileBrowserItem);
+}
+
+export function getListFilesErrorMessage(err: unknown): string {
+  if (err instanceof AxiosError) {
+    if (err.code === "ERR_NETWORK") {
+      return "Unable to reach the server. Check your connection.";
+    }
+    if (err.response?.status === 403) {
+      const data = err.response.data as
+        | { detail?: string }
+        | string
+        | undefined;
+      if (typeof data === "object" && data?.detail) return data.detail;
+      return "You do not have permission to use the file browser.";
+    }
+    if (typeof err.response?.data === "string" && err.response.data.trim()) {
+      return err.response.data;
+    }
+  }
+  return "Unable to load directory contents.";
+}
+
+export function isListFilesPermissionError(err: unknown): boolean {
+  return err instanceof AxiosError && err.response?.status === 403;
+}
+
+export function isListFilesAgentOfflineError(message: string): boolean {
+  return /unable to contact the agent/i.test(message);
 }
 
 export function makeColumnSort(
