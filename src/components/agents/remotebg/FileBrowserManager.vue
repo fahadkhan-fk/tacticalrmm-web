@@ -51,6 +51,7 @@
       :rows="filteredRows"
       :loading="loading"
       :no-data-label="tableNoDataLabel"
+      :empty-is-error="!!listError"
       :show-drop-overlay="isDragging && hasUploadPath"
       :current-path="currentPath"
       @row-dblclick="onRowDoubleClick"

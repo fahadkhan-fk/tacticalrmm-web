@@ -23,6 +23,10 @@
       v-model:selected="selected"
       :no-data-label="noDataLabel"
     >
+      <template #no-data>
+        <span class="hidden-no-data-slot" aria-hidden="true" />
+      </template>
+
       <template #header-selection="scope">
         <q-checkbox v-model="scope.selected" dense size="xs" />
       </template>
@@ -146,6 +150,15 @@
     </q-table>
 
     <div
+      v-if="showEmptyState"
+      class="file-browser-empty-state"
+      :class="{ 'file-browser-empty-state--error': emptyIsError }"
+      aria-live="polite"
+    >
+      <span class="file-browser-empty-state__label">{{ noDataLabel }}</span>
+    </div>
+
+    <div
       v-if="showDropOverlay"
       class="drop-overlay column items-center justify-center"
     >
@@ -159,7 +172,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, useModel } from "vue";
+import { computed, ref, useModel } from "vue";
 import { useQuasar } from "quasar";
 
 import { fileBrowserTableColumns } from "@/constants/filebrowser";
@@ -171,10 +184,15 @@ const props = defineProps<{
   rows: FileBrowserItem[];
   loading: boolean;
   noDataLabel: string;
+  emptyIsError?: boolean;
   showDropOverlay: boolean;
   currentPath: string;
   selected?: FileBrowserItem[];
 }>();
+
+const showEmptyState = computed(
+  () => !props.loading && props.rows.length === 0,
+);
 
 const emit = defineEmits<{
   (e: "row-dblclick", row: FileBrowserItem): void;
@@ -225,6 +243,39 @@ const tablePagination = ref({
 
 .file-table-wrap :deep(.file-browser-table--fill .q-table__bottom) {
   flex: 0 0 auto;
+}
+
+.file-table-wrap :deep(.hidden-no-data-slot) {
+  display: none;
+}
+
+.file-browser-empty-state {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 34px;
+  bottom: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  pointer-events: none;
+  z-index: 1;
+  text-align: center;
+}
+
+.file-browser-empty-state__label {
+  font-size: 0.95rem;
+  line-height: 1.4;
+  color: rgba(0, 0, 0, 0.55);
+}
+
+.file-table-wrap--dark .file-browser-empty-state__label {
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.file-browser-empty-state--error .file-browser-empty-state__label {
+  color: var(--q-negative);
 }
 
 .file-table-wrap :deep(.file-table-row:hover > td) {
