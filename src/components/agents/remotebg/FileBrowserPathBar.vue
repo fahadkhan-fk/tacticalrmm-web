@@ -20,7 +20,7 @@
       class="nav-btn nav-btn--forward"
     />
 
-    <div class="text-body2 folder-path path-bar row no-wrap min-width-0">
+    <div class="text-body2 folder-path path-bar min-width-0">
       <q-icon
         name="far fa-folder-open"
         class="q-mr-sm text-blue-5 crumb-folder-icon self-center"
@@ -30,11 +30,15 @@
 
       <div
         v-if="!pathEditMode"
-        class="row items-center col crumb-path-hitbox min-width-0"
+        class="crumb-path-hitbox min-width-0"
         @click="onPathBarClick"
       >
-        <div class="row items-center col crumb-bar no-wrap min-width-0">
-          <div class="row items-center col crumb-scroll min-width-0">
+        <div
+          ref="crumbScrollRef"
+          class="crumb-scroll min-width-0"
+          @wheel="onCrumbWheel"
+        >
+          <div class="crumb-track">
             <template
               v-for="(seg, idx) in breadcrumbSegments"
               :key="`${idx}-${seg.fullPath}`"
@@ -58,7 +62,7 @@
             </template>
             <span
               v-if="breadcrumbSegments.length === 0 && currentPath.trim()"
-              class="ellipsis col crumb-fallback-path"
+              class="crumb-fallback-path"
               >{{ currentPath }}</span
             >
           </div>
@@ -70,7 +74,7 @@
         ref="pathEditInputRef"
         v-model="pathInput"
         dense
-        class="col path-edit-input min-width-0"
+        class="path-edit-input min-width-0"
         borderless
         @keyup.enter="submitPathEdit"
         @keyup.esc="cancelPathEdit"
@@ -81,7 +85,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { QInput, useQuasar } from "quasar";
 
 const $q = useQuasar();
@@ -106,10 +110,42 @@ const { parsePathToBreadcrumbs, pathsEqual, normalizePathSlashes } =
 const pathEditMode = ref(false);
 const pathInput = ref(props.currentPath);
 const pathEditInputRef = ref<InstanceType<typeof QInput> | null>(null);
+const crumbScrollRef = ref<HTMLElement | null>(null);
 
 const breadcrumbSegments = computed(() =>
   parsePathToBreadcrumbs(props.currentPath),
 );
+
+function scrollCrumbToEnd() {
+  nextTick(() => {
+    requestAnimationFrame(() => {
+      const el = crumbScrollRef.value;
+      if (!el) return;
+      el.scrollLeft = el.scrollWidth;
+    });
+  });
+}
+
+function onCrumbWheel(ev: WheelEvent) {
+  const el = crumbScrollRef.value;
+  if (!el || el.scrollWidth <= el.clientWidth) return;
+
+  if (Math.abs(ev.deltaX) > Math.abs(ev.deltaY)) return;
+
+  ev.preventDefault();
+  el.scrollLeft += ev.deltaY;
+}
+
+watch(
+  () => props.currentPath,
+  () => {
+    if (!pathEditMode.value) scrollCrumbToEnd();
+  },
+);
+
+onMounted(() => {
+  scrollCrumbToEnd();
+});
 
 function isCurrentBreadcrumbSegment(seg: BreadcrumbSegment): boolean {
   return pathsEqual(seg.fullPath, props.currentPath);
@@ -146,6 +182,7 @@ function enterPathEditMode() {
 function cancelPathEdit() {
   pathInput.value = props.currentPath;
   pathEditMode.value = false;
+  scrollCrumbToEnd();
 }
 
 function onPathEditBlur() {
@@ -163,6 +200,7 @@ function submitPathEdit() {
   if (pathsEqual(nextPath, props.currentPath)) {
     pathInput.value = props.currentPath;
     pathEditMode.value = false;
+    scrollCrumbToEnd();
     return;
   }
   emit("navigate", nextPath);
@@ -175,18 +213,19 @@ function submitPathEdit() {
   display: flex;
   flex-direction: row;
   flex-wrap: nowrap;
-  align-items: stretch;
-  flex: 1;
+  align-items: center;
+  flex: 1 1 auto;
   max-width: 720px;
+  min-width: 0;
   height: 40px;
   min-height: 40px;
+  max-height: 40px;
   box-sizing: border-box;
   border: 1px solid #ccc;
   background: transparent;
   padding: 0 6px;
   border-radius: 8px;
   margin-bottom: 0;
-  min-width: 0;
   font-size: 0.875rem;
   line-height: 1.25rem;
   color: rgba(0, 0, 0, 0.75);
@@ -204,22 +243,32 @@ function submitPathEdit() {
   cursor: default;
   flex: 1 1 auto;
   min-width: 0;
-  min-height: 0;
-}
-
-.crumb-btn:not(:disabled) {
-  cursor: pointer;
-}
-
-.crumb-bar {
-  gap: 0;
+  height: 100%;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
 }
 
 .crumb-scroll {
   overflow-x: auto;
   overflow-y: hidden;
-  flex: 1 1 auto;
-  scrollbar-width: thin;
+  width: 100%;
+  max-height: 100%;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.crumb-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.crumb-track {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  white-space: nowrap;
+  width: max-content;
+  min-width: 100%;
 }
 
 .crumb-separator {
@@ -241,6 +290,10 @@ function submitPathEdit() {
   border-radius: 6px;
 }
 
+.crumb-btn:not(:disabled) {
+  cursor: pointer;
+}
+
 .crumb-btn :deep(.q-btn__wrapper) {
   padding: 0 3px;
   min-height: 0;
@@ -257,13 +310,18 @@ function submitPathEdit() {
 }
 
 .crumb-fallback-path {
+  flex-shrink: 0;
   padding-left: 4px;
   color: rgba(0, 0, 0, 0.65);
+  white-space: nowrap;
 }
 
 .path-edit-input {
   display: flex;
   align-items: stretch;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
 }
 
 .path-edit-input :deep(.q-field) {
@@ -290,6 +348,7 @@ function submitPathEdit() {
 
 .file-path-row {
   gap: 0;
+  min-width: 0;
 }
 
 .file-path-row :deep(.nav-btn) {
