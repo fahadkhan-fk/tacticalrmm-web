@@ -16,8 +16,9 @@
       dense
       flat
       icon="arrow_forward"
-      disable
       class="nav-btn nav-btn--forward"
+      :disable="!canGoForward"
+      @click="emit('forward')"
     />
 
     <div class="text-body2 folder-path path-bar min-width-0">
@@ -96,12 +97,14 @@ import type { BreadcrumbSegment } from "@/types/filebrowser";
 const props = defineProps<{
   currentPath: string;
   canGoBack: boolean;
+  canGoForward: boolean;
   agentPlatform?: string;
 }>();
 
 const emit = defineEmits<{
   (e: "navigate", path: string): void;
   (e: "back"): void;
+  (e: "forward"): void;
 }>();
 
 const { parsePathToBreadcrumbs, pathsEqual, normalizePathSlashes } =

@@ -9,9 +9,11 @@
   >
     <FileBrowserPathBar
       :current-path="currentPath"
-      :can-go-back="historyIndex > 0"
+      :can-go-back="canGoBack"
+      :can-go-forward="canGoForward"
       :agent-platform="agentPlatform"
       @back="goBack"
+      @forward="goForward"
       @navigate="setPath"
     />
 
@@ -165,6 +167,11 @@ const isFileDragSession = ref(false);
 
 const history = ref<string[]>([]);
 const historyIndex = ref(0);
+
+const canGoBack = computed(() => historyIndex.value > 0);
+const canGoForward = computed(
+  () => historyIndex.value < history.value.length - 1,
+);
 
 const propertiesDialog = ref(false);
 const selectedPropertyItem = ref<FileBrowserItem | null>(null);
@@ -475,9 +482,18 @@ function setPath(path: string) {
 }
 
 function goBack() {
-  if (historyIndex.value <= 0) return;
+  if (!canGoBack.value) return;
 
   historyIndex.value -= 1;
+  currentPath.value = history.value[historyIndex.value];
+  selectedRows.value = [];
+  void refresh();
+}
+
+function goForward() {
+  if (!canGoForward.value) return;
+
+  historyIndex.value += 1;
   currentPath.value = history.value[historyIndex.value];
   selectedRows.value = [];
   void refresh();
