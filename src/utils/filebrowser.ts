@@ -56,7 +56,7 @@ export function parseSizeLabelToBytes(size?: string): number {
 }
 
 export function defaultFileBrowserRootPath(platform: string): string {
-  switch (platform) {
+  switch ((platform || "").toLowerCase()) {
     case "windows":
       return "C:\\Users\\Public";
     case "darwin":
@@ -67,6 +67,34 @@ export function defaultFileBrowserRootPath(platform: string): string {
   }
 }
 
+export function isLikelyWindowsPath(path: string): boolean {
+  const trimmed = (path || "").trim();
+  return /^[A-Za-z]:[\\/]/.test(trimmed) || trimmed.startsWith("\\\\");
+}
+
+export function normalizeAgentListPath(
+  path: string,
+  platform?: string,
+): string {
+  const trimmed = (path || "").trim();
+  if (!trimmed) return trimmed;
+
+  const plat = (platform || "").toLowerCase();
+  const useWindows = plat === "windows" || isLikelyWindowsPath(trimmed);
+
+  if (useWindows) {
+    const normalized = trimmed.replace(/\//g, "\\");
+    const driveRoot = /^([A-Za-z]):\\*$/.exec(normalized);
+    if (driveRoot) return `${driveRoot[1]}:\\`;
+    if (normalized.startsWith("\\\\")) return normalized.replace(/\\+$/, "");
+    return normalized;
+  }
+
+  let normalized = trimmed.replace(/\\/g, "/");
+  if (normalized !== "/") normalized = normalized.replace(/\/+$/, "");
+  return normalized || "/";
+}
+
 export function formatFileBrowserTimestamp(iso?: string): string {
   if (!iso) return "";
   return formatDate(iso, "YYYY-MM-DD h:mm A");
@@ -75,10 +103,11 @@ export function formatFileBrowserTimestamp(iso?: string): string {
 export function mapApiItemToFileBrowserItem(
   raw: FileBrowserApiItem,
 ): FileBrowserItem {
+  const normalizedPath = normalizeAgentListPath(raw.path);
   const item: FileBrowserItem = {
-    id: raw.id || raw.path,
+    id: normalizeAgentListPath(raw.id || raw.path),
     name: raw.name,
-    path: raw.path,
+    path: normalizedPath,
     type: raw.type,
     modified: formatFileBrowserTimestamp(raw.modified),
     created: formatFileBrowserTimestamp(raw.created),

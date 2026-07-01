@@ -1,15 +1,20 @@
-import { computed, type MaybeRef, unref } from "vue";
+import { computed, type MaybeRef, toValue } from "vue";
 import { uid } from "quasar";
 
 import type { QTreeFileNode } from "../types/filebrowser";
 import type { BreadcrumbSegment } from "../types/filebrowser";
+import {
+  isLikelyWindowsPath,
+  normalizeAgentListPath,
+} from "../utils/filebrowser";
 
 function isWindowsPlatform(platform: string): boolean {
-  return platform === "windows";
+  return (platform || "").toLowerCase() === "windows";
 }
 
 export function useFileBrowser(platform: MaybeRef<string> = "windows") {
-  const isWindows = computed(() => isWindowsPlatform(unref(platform)));
+  const resolvedPlatform = computed(() => toValue(platform));
+  const isWindows = computed(() => isWindowsPlatform(resolvedPlatform.value));
   const pathSeparator = computed<"/" | "\\">(() =>
     isWindows.value ? "\\" : "/",
   );
@@ -64,7 +69,8 @@ export function useFileBrowser(platform: MaybeRef<string> = "windows") {
 
   function normalizePathSlashes(p: string): string {
     const trimmed = p.trim();
-    if (isWindows.value) {
+    const useWindows = isWindows.value || isLikelyWindowsPath(trimmed);
+    if (useWindows) {
       return trimmed.replace(/\//g, "\\");
     }
     return trimmed.replace(/\\/g, "/");
@@ -169,22 +175,7 @@ export function useFileBrowser(platform: MaybeRef<string> = "windows") {
   }
 
   function normalizeNavPath(path: string): string {
-    let normalized = normalizePathSlashes(path);
-    if (isWindows.value) {
-      const driveRoot = /^([A-Za-z]):\\*$/.exec(normalized);
-      if (driveRoot) {
-        normalized = `${driveRoot[1]}:\\`;
-      } else if (normalized.startsWith("\\\\")) {
-        normalized = normalized.replace(/\\+$/, "");
-      }
-      return normalized;
-    }
-
-    if (!normalized) return "/";
-    if (normalized !== "/") {
-      normalized = normalized.replace(/\/+$/, "");
-    }
-    return normalized || "/";
+    return normalizeAgentListPath(path, resolvedPlatform.value);
   }
 
   return {

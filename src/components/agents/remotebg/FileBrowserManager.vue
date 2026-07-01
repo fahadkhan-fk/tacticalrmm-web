@@ -94,7 +94,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onMounted, ref, toRef, watch } from "vue";
 import { copyToClipboard, useQuasar } from "quasar";
 
 import { fetchAgentFilesAll } from "@/api/agents";
@@ -143,13 +143,15 @@ const props = withDefaults(
   },
 );
 
+const agentPlatform = toRef(props, "agentPlatform");
+
 const $q = useQuasar();
 const {
   joinRemotePathSegment,
   normalizeNavPath,
   replacePathLastSegment,
   pathsEqual,
-} = useFileBrowser(() => props.agentPlatform);
+} = useFileBrowser(agentPlatform);
 
 const loading = ref(false);
 const listError = ref<string | null>(null);
@@ -219,12 +221,14 @@ function initializeRootPath() {
 }
 
 async function refresh() {
-  const path = currentPath.value.trim();
+  const path = normalizeNavPath(currentPath.value.trim());
   if (!path) {
     listError.value = "Path is required";
     rows.value = [];
     return;
   }
+
+  currentPath.value = path;
 
   const seq = ++loadSeq;
   loading.value = true;
@@ -232,7 +236,12 @@ async function refresh() {
   selectedRows.value = [];
 
   try {
-    const data = await fetchAgentFilesAll(props.agent_id, path);
+    const data = await fetchAgentFilesAll(
+      props.agent_id,
+      path,
+      undefined,
+      agentPlatform.value,
+    );
     if (seq !== loadSeq) return;
 
     currentPath.value = data.path || path;

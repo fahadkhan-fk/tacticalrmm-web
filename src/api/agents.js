@@ -1,4 +1,5 @@
 import axios from "axios";
+import { normalizeAgentListPath } from "@/utils/filebrowser";
 import { openURL } from "quasar";
 import { router } from "@/router";
 
@@ -416,10 +417,12 @@ export async function fetchAgentFiles(
   path,
   page = 1,
   pageSize = FILE_BROWSER_DEFAULT_PAGE_SIZE,
+  platform,
 ) {
+  const normalizedPath = normalizeAgentListPath(path, platform);
   try {
     const { data } = await axios.get(`${baseUrl}/${agent_id}/files/`, {
-      params: { path, page, page_size: pageSize },
+      params: { path: normalizedPath, page, page_size: pageSize },
     });
     return data;
   } catch (e) {
@@ -432,13 +435,21 @@ export async function fetchAgentFilesAll(
   agent_id,
   path,
   pageSize = FILE_BROWSER_DEFAULT_PAGE_SIZE,
+  platform,
 ) {
+  const normalizedPath = normalizeAgentListPath(path, platform);
   let page = 1;
   let combinedItems = [];
   let lastResponse = null;
 
   while (true) {
-    const data = await fetchAgentFiles(agent_id, path, page, pageSize);
+    const data = await fetchAgentFiles(
+      agent_id,
+      normalizedPath,
+      page,
+      pageSize,
+      platform,
+    );
     lastResponse = data;
     combinedItems = combinedItems.concat(data.items ?? []);
     if (!data.has_more) break;
@@ -447,7 +458,7 @@ export async function fetchAgentFilesAll(
 
   if (!lastResponse) {
     return {
-      path,
+      path: normalizedPath,
       items: [],
       has_more: false,
       page: 1,
