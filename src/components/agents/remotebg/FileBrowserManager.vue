@@ -68,6 +68,8 @@
     <FileBrowserPropertiesDialog
       v-model="propertiesDialog"
       :item="selectedPropertyItem"
+      :loading="propertiesLoading"
+      :error="propertiesError"
     />
 
     <FileBrowserNewFolderModal
@@ -100,7 +102,7 @@
 import { computed, onMounted, ref, toRef, watch } from "vue";
 import { copyToClipboard, useQuasar } from "quasar";
 
-import { fetchAgentFilesAll } from "@/api/agents";
+import { fetchAgentFileProperties, fetchAgentFilesAll } from "@/api/agents";
 import FileBrowserNewFolderModal from "@/components/agents/remotebg/FileBrowserNewFolderModal.vue";
 import FileBrowserPathBar from "@/components/agents/remotebg/FileBrowserPathBar.vue";
 import FileBrowserPropertiesDialog from "@/components/agents/remotebg/FileBrowserPropertiesDialog.vue";
@@ -126,6 +128,7 @@ import {
   isFileDrag,
   isListFilesAgentOfflineError,
   isListFilesPermissionError,
+  mapApiItemToFileBrowserItem,
   mapApiItemsToFileBrowserItems,
   mockDownloadFileName,
 } from "@/utils/filebrowser";
@@ -175,6 +178,8 @@ const canGoForward = computed(
 
 const propertiesDialog = ref(false);
 const selectedPropertyItem = ref<FileBrowserItem | null>(null);
+const propertiesLoading = ref(false);
+const propertiesError = ref<string | null>(null);
 
 const newFolderDialog = ref(false);
 const renameDialog = ref(false);
@@ -508,9 +513,24 @@ function openFolder(row: FileBrowserItem) {
   setPath(row.path);
 }
 
-function showProperties(row: FileBrowserItem) {
+async function showProperties(row: FileBrowserItem) {
   selectedPropertyItem.value = row;
   propertiesDialog.value = true;
+  propertiesLoading.value = true;
+  propertiesError.value = null;
+
+  try {
+    const data = await fetchAgentFileProperties(
+      props.agent_id,
+      row.path,
+      agentPlatform.value,
+    );
+    selectedPropertyItem.value = mapApiItemToFileBrowserItem(data);
+  } catch (err: unknown) {
+    propertiesError.value = getListFilesErrorMessage(err);
+  } finally {
+    propertiesLoading.value = false;
+  }
 }
 
 function showPropertiesFromToolbar() {
