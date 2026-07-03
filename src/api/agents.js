@@ -476,3 +476,19 @@ export async function fetchAgentFilesAll(
     total: combinedItems.length,
   };
 }
+
+export async function fetchAgentFileProperties(agent_id, path, platform) {
+  const normalizedPath = normalizeAgentListPath(path, platform);
+  try {
+    const { data } = await axios.get(
+      `${baseUrl}/${agent_id}/files/properties/`,
+      {
+        params: { path: normalizedPath },
+      },
+    );
+    return data;
+  } catch (e) {
+    console.error(e);
+    throw e;
+  }
+}
