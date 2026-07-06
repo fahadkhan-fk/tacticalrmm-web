@@ -33,7 +33,8 @@
           unelevated
           label="Create"
           color="primary"
-          :disable="!localName.trim()"
+          :loading="saving"
+          :disable="saving || !localName.trim()"
           @click="onSubmit"
         />
       </q-card-actions>
@@ -50,6 +51,7 @@ import { duplicateNameRule, nameSegmentBaseRule } from "@/utils/filebrowser";
 const props = defineProps<{
   modelValue: boolean;
   existingNames: string[];
+  saving?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -78,6 +80,8 @@ watch(
 );
 
 async function onSubmit() {
+  if (props.saving) return;
+
   const input = nameInputRef.value;
   if (input) {
     const ok = await input.validate();

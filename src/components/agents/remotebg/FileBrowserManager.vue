@@ -51,7 +51,7 @@
     <FileBrowserTable
       v-model:selected="selectedRows"
       :rows="filteredRows"
-      :loading="loading"
+      :loading="loading || mutationSaving"
       :no-data-label="tableNoDataLabel"
       :empty-is-error="!!listError"
       :show-drop-overlay="isDragging && hasUploadPath"
@@ -75,6 +75,7 @@
     <FileBrowserNewFolderModal
       v-model="newFolderDialog"
       :existing-names="rowNames"
+      :saving="mutationSaving"
       @save="confirmNewFolder"
     />
 
@@ -82,6 +83,7 @@
       v-model="renameDialog"
       :item="renameTargetItem"
       :existing-names="rowNames"
+      :saving="mutationSaving"
       @save="confirmRename"
       @hide="renameTargetItem = null"
     />
@@ -102,7 +104,13 @@
 import { computed, onMounted, ref, toRef, watch } from "vue";
 import { copyToClipboard, useQuasar } from "quasar";
 
-import { fetchAgentFileProperties, fetchAgentFilesAll } from "@/api/agents";
+import {
+  createAgentFileFolder,
+  deleteAgentFiles,
+  fetchAgentFileProperties,
+  fetchAgentFilesAll,
+  renameAgentFile,
+} from "@/api/agents";
 import FileBrowserNewFolderModal from "@/components/agents/remotebg/FileBrowserNewFolderModal.vue";
 import FileBrowserPathBar from "@/components/agents/remotebg/FileBrowserPathBar.vue";
 import FileBrowserPropertiesDialog from "@/components/agents/remotebg/FileBrowserPropertiesDialog.vue";
@@ -113,17 +121,21 @@ import FileBrowserUploadQueue from "@/components/agents/remotebg/FileBrowserUplo
 import ConfirmDialog from "@/components/ui/ConfirmDialog.vue";
 import { useFileBrowser } from "@/composables/filebrowser";
 import {
+  MAX_DELETE_PATHS_PER_REQUEST,
   MAX_UPLOAD_FILE_SIZE_BYTES,
   MAX_UPLOAD_FILES_PER_SELECTION,
   MAX_UPLOAD_QUEUE_ITEMS,
 } from "@/constants/filebrowser";
-import type { FileBrowserItem, UploadQueueItem } from "@/types/filebrowser";
+import type {
+  FileBrowserDeleteResult,
+  FileBrowserItem,
+  UploadQueueItem,
+} from "@/types/filebrowser";
 import { bytes2Human } from "@/utils/format";
 import {
   defaultFileBrowserRootPath,
-  extensionFromFileName,
   fileListToArray,
-  formatMockListTimestamp,
+  getFileBrowserErrorMessage,
   getListFilesErrorMessage,
   isFileDrag,
   isListFilesAgentOfflineError,
@@ -152,12 +164,7 @@ const props = withDefaults(
 const agentPlatform = toRef(props, "agentPlatform");
 
 const $q = useQuasar();
-const {
-  joinRemotePathSegment,
-  normalizeNavPath,
-  replacePathLastSegment,
-  pathsEqual,
-} = useFileBrowser(agentPlatform);
+const { normalizeNavPath, pathsEqual } = useFileBrowser(agentPlatform);
 
 const loading = ref(false);
 const listError = ref<string | null>(null);
@@ -192,8 +199,9 @@ const fileInputRef = ref<HTMLInputElement | null>(null);
 
 const uploadQueue = ref<UploadQueueItem[]>([]);
 let uploadIdSeq = 0;
-let newFolderRowIdSeq = 100;
 let loadSeq = 0;
+
+const mutationSaving = ref(false);
 
 const uploadQueueItems = computed<UploadQueueItem[]>(() => uploadQueue.value);
 const hasUploadPath = computed(() => currentPath.value.trim().length > 0);
@@ -258,7 +266,10 @@ async function refresh() {
     if (seq !== loadSeq) return;
 
     currentPath.value = data.path || path;
-    rows.value = mapApiItemsToFileBrowserItems(data.items ?? []);
+    rows.value = mapApiItemsToFileBrowserItems(
+      data.items ?? [],
+      agentPlatform.value,
+    );
     listError.value = null;
   } catch (err: unknown) {
     if (seq !== loadSeq) return;
@@ -323,22 +334,31 @@ function openNewFolderDialog() {
   newFolderDialog.value = true;
 }
 
-function confirmNewFolder(name: string) {
-  const now = new Date();
-  const stamp = formatMockListTimestamp(now);
+async function confirmNewFolder(name: string) {
+  if (mutationSaving.value) return;
 
-  rows.value.push({
-    id: `nf-${newFolderRowIdSeq++}`,
-    name,
-    path: joinRemotePathSegment(currentPath.value.trim(), name),
-    type: "folder",
-    modified: stamp,
-    created: stamp,
-    accessed: stamp,
-  });
+  const parentPath = normalizeNavPath(currentPath.value.trim());
+  if (!parentPath) {
+    notifyWarning("Select a folder path before creating a folder.");
+    return;
+  }
 
-  notifySuccess("Folder created");
-  newFolderDialog.value = false;
+  mutationSaving.value = true;
+  try {
+    await createAgentFileFolder(
+      props.agent_id,
+      parentPath,
+      name,
+      agentPlatform.value,
+    );
+    newFolderDialog.value = false;
+    notifySuccess("Folder created");
+    await refresh();
+  } catch (err: unknown) {
+    notifyError(getFileBrowserErrorMessage(err, "Unable to create folder."));
+  } finally {
+    mutationSaving.value = false;
+  }
 }
 
 function openRenameDialog(row?: FileBrowserItem) {
@@ -351,39 +371,40 @@ function openRenameDialog(row?: FileBrowserItem) {
   renameDialog.value = true;
 }
 
-function confirmRename(newName: string) {
+async function confirmRename(newName: string) {
+  if (mutationSaving.value) return;
+
   const target = renameTargetItem.value;
   if (!target) return;
 
-  const newPath = replacePathLastSegment(target.path, newName);
-  const idx = rows.value.findIndex((r) => r.id === target.id);
-  if (idx === -1) return;
-
-  const prev = rows.value[idx];
-  const next: FileBrowserItem = {
-    ...prev,
-    name: newName,
-    path: newPath,
-  };
-  if (prev.type === "file") {
-    const ext = extensionFromFileName(newName);
-    if (ext !== undefined) next.extension = ext;
-    else delete next.extension;
+  mutationSaving.value = true;
+  try {
+    await renameAgentFile(
+      props.agent_id,
+      normalizeNavPath(target.path),
+      newName,
+      agentPlatform.value,
+    );
+    renameDialog.value = false;
+    renameTargetItem.value = null;
+    notifySuccess("Renamed");
+    await refresh();
+  } catch (err: unknown) {
+    notifyError(getFileBrowserErrorMessage(err, "Unable to rename item."));
+  } finally {
+    mutationSaving.value = false;
   }
-
-  rows.value.splice(idx, 1, next);
-  selectedRows.value = selectedRows.value.map((s) =>
-    s.id === target.id ? next : s,
-  );
-
-  notifySuccess("Renamed");
-  renameDialog.value = false;
-  renameTargetItem.value = null;
 }
 
 function openDeleteDialog() {
   if (selectedRows.value.length === 0) {
     notifyWarning("Select one or more items to delete.");
+    return;
+  }
+  if (selectedRows.value.length > MAX_DELETE_PATHS_PER_REQUEST) {
+    notifyWarning(
+      `Select at most ${MAX_DELETE_PATHS_PER_REQUEST} items to delete at once.`,
+    );
     return;
   }
   deletePendingItems.value = [...selectedRows.value];
@@ -393,30 +414,80 @@ function openDeleteDialog() {
 function openDeleteDialogFromContext(row: FileBrowserItem) {
   const selected = selectedRows.value;
   const inSelection = selected.some((s) => s.id === row.id);
-  deletePendingItems.value =
-    inSelection && selected.length > 0 ? [...selected] : [row];
+  const pending = inSelection && selected.length > 0 ? [...selected] : [row];
+  if (pending.length > MAX_DELETE_PATHS_PER_REQUEST) {
+    notifyWarning(
+      `Select at most ${MAX_DELETE_PATHS_PER_REQUEST} items to delete at once.`,
+    );
+    return;
+  }
+  deletePendingItems.value = pending;
   deleteDialog.value = true;
 }
 
-function confirmDelete() {
-  const pending = deletePendingItems.value;
-  if (!pending.length) {
-    deleteDialog.value = false;
+function pendingItemName(
+  pending: FileBrowserItem[],
+  resultPath: string,
+): string {
+  const match = pending.find((item) => pathsEqual(item.path, resultPath));
+  return match?.name ?? resultPath.split(/[/\\]/).pop() ?? resultPath;
+}
+
+function notifyDeleteResults(
+  pending: FileBrowserItem[],
+  results: FileBrowserDeleteResult[],
+) {
+  const succeeded = results.filter((result) => result.success);
+  const failed = results.filter((result) => !result.success);
+
+  if (failed.length === 0) {
+    if (succeeded.length === 1) {
+      notifySuccess(
+        `Deleted "${pendingItemName(pending, succeeded[0].path)}".`,
+      );
+      return;
+    }
+    notifySuccess(`Deleted ${succeeded.length} items.`);
     return;
   }
 
-  const ids = new Set(pending.map((i) => i.id));
-  const count = pending.length;
-  const singleName = count === 1 ? pending[0].name : "";
+  if (succeeded.length === 0) {
+    const detail = failed
+      .map((result) => {
+        const name = pendingItemName(pending, result.path);
+        return result.error ? `${name}: ${result.error}` : name;
+      })
+      .join("; ");
+    notifyError(detail || "Unable to delete items.");
+    return;
+  }
 
-  rows.value = rows.value.filter((r) => !ids.has(r.id));
-  selectedRows.value = [];
-  deletePendingItems.value = [];
+  notifyWarning(
+    `Deleted ${succeeded.length} of ${results.length} items. ${failed.length} failed.`,
+  );
+}
 
-  if (count === 1) {
-    notifySuccess(`Deleted "${singleName}".`);
-  } else {
-    notifySuccess(`Deleted ${count} items.`);
+async function confirmDelete() {
+  if (mutationSaving.value) return;
+
+  const pending = [...deletePendingItems.value];
+  if (!pending.length) return;
+
+  mutationSaving.value = true;
+  try {
+    const data = await deleteAgentFiles(
+      props.agent_id,
+      pending.map((item) => item.path),
+      agentPlatform.value,
+    );
+    selectedRows.value = [];
+    deletePendingItems.value = [];
+    notifyDeleteResults(pending, data.results ?? []);
+    await refresh();
+  } catch (err: unknown) {
+    notifyError(getFileBrowserErrorMessage(err, "Unable to delete items."));
+  } finally {
+    mutationSaving.value = false;
   }
 }
 
@@ -525,7 +596,10 @@ async function showProperties(row: FileBrowserItem) {
       row.path,
       agentPlatform.value,
     );
-    selectedPropertyItem.value = mapApiItemToFileBrowserItem(data);
+    selectedPropertyItem.value = mapApiItemToFileBrowserItem(
+      data,
+      agentPlatform.value,
+    );
   } catch (err: unknown) {
     propertiesError.value = getListFilesErrorMessage(err);
   } finally {

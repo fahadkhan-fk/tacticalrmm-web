@@ -1,4 +1,8 @@
 import type { FileBrowserApiItem, FileBrowserItem } from "@/types/filebrowser";
+import {
+  FILE_BROWSER_INVALID_NAME_CHARS,
+  FILE_BROWSER_MAX_NAME_LENGTH,
+} from "@/constants/filebrowser";
 import { bytes2Human, formatDate } from "@/utils/format";
 import { AxiosError } from "axios";
 
@@ -102,10 +106,11 @@ export function formatFileBrowserTimestamp(iso?: string): string {
 
 export function mapApiItemToFileBrowserItem(
   raw: FileBrowserApiItem,
+  platform?: string,
 ): FileBrowserItem {
-  const normalizedPath = normalizeAgentListPath(raw.path);
+  const normalizedPath = normalizeAgentListPath(raw.path, platform);
   const item: FileBrowserItem = {
-    id: normalizeAgentListPath(raw.id || raw.path),
+    id: normalizeAgentListPath(raw.id || raw.path, platform),
     name: raw.name,
     path: normalizedPath,
     type: raw.type,
@@ -131,28 +136,72 @@ export function mapApiItemToFileBrowserItem(
 
 export function mapApiItemsToFileBrowserItems(
   items: FileBrowserApiItem[],
+  platform?: string,
 ): FileBrowserItem[] {
-  return items.map(mapApiItemToFileBrowserItem);
+  return items.map((item) => mapApiItemToFileBrowserItem(item, platform));
 }
 
 export function getListFilesErrorMessage(err: unknown): string {
+  if (err instanceof Error && err.message.trim()) {
+    return formatFileBrowserApiErrorMessage(err.message);
+  }
+
   if (err instanceof AxiosError) {
     if (err.code === "ERR_NETWORK") {
       return "Unable to reach the server. Check your connection.";
+    }
+    if (err.code === "ERR_CANCELED") {
+      return "Request was cancelled.";
     }
     if (err.response?.status === 403) {
       const data = err.response.data as
         | { detail?: string }
         | string
         | undefined;
-      if (typeof data === "object" && data?.detail) return data.detail;
+      if (typeof data === "object" && data?.detail) {
+        return formatFileBrowserApiErrorMessage(data.detail);
+      }
       return "You do not have permission to use the file browser.";
     }
-    if (typeof err.response?.data === "string" && err.response.data.trim()) {
-      return err.response.data;
+    const data = err.response?.data;
+    if (typeof data === "string" && data.trim()) {
+      return formatFileBrowserApiErrorMessage(data);
+    }
+    if (data && typeof data === "object") {
+      const record = data as Record<string, unknown>;
+      for (const key of ["detail", "message", "error"]) {
+        const value = record[key];
+        if (typeof value === "string" && value.trim()) {
+          return formatFileBrowserApiErrorMessage(value);
+        }
+      }
     }
   }
   return "Unable to load directory contents.";
+}
+
+export function formatFileBrowserApiErrorMessage(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return trimmed;
+
+  const filesFailed = /^Files \w+ failed:\s*(.+)$/i.exec(trimmed);
+  if (filesFailed?.[1]) return filesFailed[1].trim();
+
+  const genericFailed = /failed:\s*(.+)$/i.exec(trimmed);
+  if (genericFailed?.[1]) return genericFailed[1].trim();
+
+  return trimmed;
+}
+
+export function getFileBrowserErrorMessage(
+  err: unknown,
+  fallback = "Unable to complete the operation.",
+): string {
+  const message = getListFilesErrorMessage(err);
+  if (message === "Unable to load directory contents.") {
+    return fallback;
+  }
+  return message;
 }
 
 export function isListFilesPermissionError(err: unknown): boolean {
@@ -257,13 +306,20 @@ export function mockDownloadFileName(
 export function nameSegmentBaseRule(
   v: string | number | null | undefined,
 ): true | string {
-  const name = String(v ?? "").trim();
-  if (!name) return "Name is required";
-  if (name === "." || name === "..") return "The name cannot be . or ..";
-  if (/[\\/:*?"<>|\x00-\x1f]/.test(name))
-    return 'Name cannot contain \\ / : * ? " < > | or control characters';
-  if (name.endsWith(".") || name.endsWith(" "))
+  const raw = String(v ?? "");
+  if (!raw.trim()) return "Name is required";
+  if (raw.endsWith(".") || raw.endsWith(" ")) {
     return "Name cannot end with a space or a period";
+  }
+
+  const name = raw.trim();
+  if (name === "." || name === "..") return "The name cannot be . or ..";
+  if (FILE_BROWSER_INVALID_NAME_CHARS.test(name)) {
+    return 'Name cannot contain \\ / : * ? " < > | or control characters';
+  }
+  if (name.length > FILE_BROWSER_MAX_NAME_LENGTH) {
+    return `Name must be at most ${FILE_BROWSER_MAX_NAME_LENGTH} characters`;
+  }
   return true;
 }
 

@@ -33,7 +33,8 @@
           unelevated
           label="Rename"
           color="primary"
-          :disable="!canSubmit"
+          :loading="saving"
+          :disable="saving || !canSubmit"
           @click="onSubmit"
         />
       </q-card-actions>
@@ -52,6 +53,7 @@ const props = defineProps<{
   modelValue: boolean;
   item: FileBrowserItem | null;
   existingNames: string[];
+  saving?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -97,6 +99,8 @@ watch(
 );
 
 async function onSubmit() {
+  if (props.saving) return;
+
   const input = nameInputRef.value;
   if (input) {
     const ok = await input.validate();

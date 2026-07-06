@@ -66,6 +66,22 @@ export interface FileBrowserDirectoryResponse {
   total: number;
 }
 
+export interface FileBrowserMutationResponse {
+  status: "success";
+  item: FileBrowserApiItem;
+}
+
+export interface FileBrowserDeleteResult {
+  path: string;
+  success: boolean;
+  error?: string;
+}
+
+export interface FileBrowserDeleteResponse {
+  status: "success";
+  results: FileBrowserDeleteResult[];
+}
+
 export interface BreadcrumbSegment {
   label: string;
   fullPath: string;
