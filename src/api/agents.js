@@ -492,3 +492,47 @@ export async function fetchAgentFileProperties(agent_id, path, platform) {
     throw e;
   }
 }
+
+export async function createAgentFileFolder(agent_id, path, name, platform) {
+  const normalizedPath = normalizeAgentListPath(path, platform);
+  try {
+    const { data } = await axios.post(`${baseUrl}/${agent_id}/files/folder/`, {
+      path: normalizedPath,
+      name,
+    });
+    return data;
+  } catch (e) {
+    console.error(e);
+    throw e;
+  }
+}
+
+export async function renameAgentFile(agent_id, path, newName, platform) {
+  const normalizedPath = normalizeAgentListPath(path, platform);
+  const trimmedName = String(newName ?? "").trim();
+  try {
+    const { data } = await axios.post(`${baseUrl}/${agent_id}/files/rename/`, {
+      path: normalizedPath,
+      new_name: trimmedName,
+    });
+    return data;
+  } catch (e) {
+    console.error(e);
+    throw e;
+  }
+}
+
+export async function deleteAgentFiles(agent_id, paths, platform) {
+  const normalizedPaths = (paths ?? []).map((entry) =>
+    normalizeAgentListPath(entry, platform),
+  );
+  try {
+    const { data } = await axios.delete(`${baseUrl}/${agent_id}/files/`, {
+      data: { paths: normalizedPaths },
+    });
+    return data;
+  } catch (e) {
+    console.error(e);
+    throw e;
+  }
+}
