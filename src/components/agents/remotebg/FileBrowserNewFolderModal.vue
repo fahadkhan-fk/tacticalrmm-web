@@ -79,6 +79,16 @@ watch(
   },
 );
 
+watch(localName, () => {
+  nextTick(() => {
+    const input = nameInputRef.value;
+    if (!input) return;
+    if (input.hasError || localName.value.trim()) {
+      void input.validate();
+    }
+  });
+});
+
 async function onSubmit() {
   if (props.saving) return;
 

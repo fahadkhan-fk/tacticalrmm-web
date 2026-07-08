@@ -19,7 +19,6 @@
           outlined
           autofocus
           label="Name"
-          lazy-rules
           :rules="nameRules"
           maxlength="255"
           counter
@@ -97,6 +96,12 @@ watch(
     }
   },
 );
+
+watch(localName, () => {
+  nextTick(() => {
+    void nameInputRef.value?.validate();
+  });
+});
 
 async function onSubmit() {
   if (props.saving) return;
