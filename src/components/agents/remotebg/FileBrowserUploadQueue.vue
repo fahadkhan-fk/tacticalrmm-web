@@ -22,6 +22,9 @@
       Destination:
       <span class="upload-queue-destination-path">{{ destinationLabel }}</span>
     </div>
+    <div v-if="limitsCaption" class="text-caption upload-queue-limits q-mb-sm">
+      {{ limitsCaption }}
+    </div>
     <q-list
       bordered
       separator
@@ -55,12 +58,13 @@
         <q-item-section side>
           <q-badge
             :color="uploadStatusBadgeColor(item.status)"
-            :text-color="item.status === 'ready' ? 'dark' : undefined"
+            :text-color="item.status === 'queued' ? 'dark' : undefined"
             align="middle"
           >
             {{ uploadStatusLabel(item.status) }}
           </q-badge>
           <q-btn
+            v-if="canRemoveItem(item)"
             dense
             flat
             round
@@ -68,6 +72,17 @@
             size="sm"
             class="q-mt-xs"
             @click="emit('remove', item.id)"
+          />
+          <q-btn
+            v-if="item.status === 'uploading'"
+            dense
+            flat
+            round
+            icon="stop"
+            size="sm"
+            color="negative"
+            class="q-mt-xs"
+            @click="emit('cancel', item.id)"
           />
         </q-item-section>
       </q-item>
@@ -86,12 +101,18 @@ const $q = useQuasar();
 defineProps<{
   items: UploadQueueItem[];
   destinationLabel: string;
+  limitsCaption?: string;
 }>();
 
 const emit = defineEmits<{
   (e: "clear"): void;
   (e: "remove", id: string): void;
+  (e: "cancel", id: string): void;
 }>();
+
+function canRemoveItem(item: UploadQueueItem): boolean {
+  return item.status !== "uploading";
+}
 </script>
 
 <style scoped>
@@ -121,6 +142,14 @@ const emit = defineEmits<{
 
 .upload-queue-destination {
   color: rgba(0, 0, 0, 0.6);
+}
+
+.upload-queue-limits {
+  color: rgba(0, 0, 0, 0.55);
+}
+
+.upload-queue-section--dark .upload-queue-limits {
+  color: rgba(255, 255, 255, 0.5);
 }
 
 .upload-queue-section--dark .upload-queue-destination {

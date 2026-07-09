@@ -44,8 +44,19 @@
       v-if="uploadQueueItems.length"
       :items="uploadQueueItems"
       :destination-label="uploadDestinationLabel"
+      :limits-caption="uploadLimitsCaption"
       @clear="clearUploadQueue"
       @remove="removeUploadItem"
+      @cancel="cancelUploadItem"
+    />
+
+    <FileBrowserDownloadProgress
+      v-if="downloadState.active"
+      :file-name="downloadState.fileName"
+      :progress="downloadState.progress"
+      :status="downloadState.status"
+      :error-message="downloadState.errorMessage"
+      @cancel="cancelDownload"
     />
 
     <FileBrowserTable
@@ -111,6 +122,7 @@ import {
   fetchAgentFilesAll,
   renameAgentFile,
 } from "@/api/agents";
+import FileBrowserDownloadProgress from "@/components/agents/remotebg/FileBrowserDownloadProgress.vue";
 import FileBrowserNewFolderModal from "@/components/agents/remotebg/FileBrowserNewFolderModal.vue";
 import FileBrowserPathBar from "@/components/agents/remotebg/FileBrowserPathBar.vue";
 import FileBrowserPropertiesDialog from "@/components/agents/remotebg/FileBrowserPropertiesDialog.vue";
@@ -126,11 +138,21 @@ import {
   MAX_UPLOAD_FILES_PER_SELECTION,
   MAX_UPLOAD_QUEUE_ITEMS,
 } from "@/constants/filebrowser";
+import { FILE_TRANSFER_DEFAULT_CHUNK_SIZE } from "@/constants/fileTransfer";
 import type {
   FileBrowserDeleteResult,
   FileBrowserItem,
   UploadQueueItem,
 } from "@/types/filebrowser";
+import {
+  isAbortError as isDownloadAbortError,
+  runFileDownloadTransfer,
+} from "@/services/fileTransfer/download";
+import {
+  isAbortError as isUploadAbortError,
+  runFileUploadTransfer,
+} from "@/services/fileTransfer/upload";
+import type { DownloadTransferState } from "@/types/fileTransfer";
 import { bytes2Human } from "@/utils/format";
 import {
   defaultFileBrowserRootPath,
@@ -142,7 +164,7 @@ import {
   isListFilesPermissionError,
   mapApiItemToFileBrowserItem,
   mapApiItemsToFileBrowserItems,
-  mockDownloadFileName,
+  normalizeAgentListPath,
 } from "@/utils/filebrowser";
 import {
   notifyError,
@@ -198,7 +220,18 @@ const deletePendingItems = ref<FileBrowserItem[]>([]);
 const fileInputRef = ref<HTMLInputElement | null>(null);
 
 const uploadQueue = ref<UploadQueueItem[]>([]);
+const uploadAbortControllers = new Map<string, AbortController>();
+let uploadProcessorRunning = false;
 let uploadIdSeq = 0;
+
+const downloadState = ref<DownloadTransferState>({
+  active: false,
+  fileName: "",
+  sourcePath: "",
+  progress: 0,
+  status: "idle",
+});
+let downloadAbortController: AbortController | null = null;
 let loadSeq = 0;
 
 const mutationSaving = ref(false);
@@ -215,6 +248,14 @@ const uploadDestinationLabel = computed(() => {
   const first = uploadQueue.value[0].destinationPath;
   const allSame = uploadQueue.value.every((i) => i.destinationPath === first);
   return allSame ? first : `${first} (+ other paths in queue)`;
+});
+
+const uploadLimitsCaption = computed(() => {
+  const maxSizeLabel =
+    MAX_UPLOAD_FILE_SIZE_BYTES > 0
+      ? bytes2Human(MAX_UPLOAD_FILE_SIZE_BYTES)
+      : "unlimited";
+  return `Max ${maxSizeLabel} per file · up to ${MAX_UPLOAD_FILES_PER_SELECTION} files per selection · queue capacity ${MAX_UPLOAD_QUEUE_ITEMS}`;
 });
 
 const filteredRows = computed(() => {
@@ -491,48 +532,112 @@ async function confirmDelete() {
   }
 }
 
-function startMockDownload(items: FileBrowserItem[]) {
-  if (!items.length) {
-    notifyWarning("Select one or more items to download.");
+function resolveDownloadItems(items: FileBrowserItem[]): FileBrowserItem[] {
+  if (!items.length) return [];
+  const files = items.filter((item) => item.type === "file");
+  const folders = items.filter((item) => item.type === "folder");
+  if (folders.length > 0) {
+    notifyWarning(
+      "Folder download is not available yet. Select a single file to download.",
+    );
+    return [];
+  }
+  if (files.length !== 1) {
+    notifyWarning("Select exactly one file to download.");
+    return [];
+  }
+  return files;
+}
+
+async function startFileDownload(items: FileBrowserItem[]) {
+  const targets = resolveDownloadItems(items);
+  if (!targets.length) return;
+
+  if (
+    downloadState.value.active &&
+    (downloadState.value.status === "initializing" ||
+      downloadState.value.status === "downloading" ||
+      downloadState.value.status === "completing")
+  ) {
+    notifyWarning("A download is already in progress.");
     return;
   }
 
-  const folderCount = items.filter((item) => item.type === "folder").length;
-  const asArchive = folderCount > 0;
+  const item = targets[0];
+  downloadAbortController?.abort();
+  downloadAbortController = new AbortController();
+  const signal = downloadAbortController.signal;
 
-  const manifest = [
-    "Mock Tactical RMM file browser download",
-    `Mode: ${asArchive ? "ZIP archive" : "direct file download"}`,
-    `Source path: ${currentPath.value}`,
-    "",
-    "Items:",
-    ...items.map((item) => `- [${item.type}] ${item.path}`),
-    "",
-  ].join("\n");
+  downloadState.value = {
+    active: true,
+    fileName: item.name,
+    sourcePath: item.path,
+    progress: 0,
+    status: "initializing",
+  };
 
-  const blob = new Blob([manifest], { type: "text/plain;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = mockDownloadFileName(items, asArchive);
-  link.click();
-  URL.revokeObjectURL(url);
+  try {
+    const result = await runFileDownloadTransfer(props.agent_id, item.path, {
+      signal,
+      chunkSize: FILE_TRANSFER_DEFAULT_CHUNK_SIZE,
+      onProgress: ({ committedOffset, totalSize }) => {
+        downloadState.value.progress =
+          totalSize > 0 ? committedOffset / totalSize : 0;
+        if (downloadState.value.status === "initializing") {
+          downloadState.value.status = "downloading";
+        }
+      },
+      onStatus: (status) => {
+        downloadState.value.status = status;
+      },
+    });
 
-  notifyInfo(
-    items.length === 1
-      ? `Downloading "${items[0].name}"${asArchive ? " as ZIP" : ""}.`
-      : `Downloading ${items.length} items${asArchive ? " as ZIP archive" : ""}.`,
-  );
+    downloadState.value.progress = 1;
+    downloadState.value.status = "completed";
+    notifySuccess(
+      result.integrityOk
+        ? `Downloaded "${result.fileName}" (${bytes2Human(result.bytesWritten)}). Integrity verified.`
+        : `Downloaded "${result.fileName}" (${bytes2Human(result.bytesWritten)}).`,
+    );
+
+    window.setTimeout(() => {
+      if (downloadState.value.status === "completed") {
+        downloadState.value.active = false;
+        downloadState.value.status = "idle";
+      }
+    }, 4000);
+  } catch (err: unknown) {
+    if (isDownloadAbortError(err)) {
+      downloadState.value.status = "cancelled";
+      notifyInfo(
+        "Download stopped. Click Download again on the same file to resume.",
+      );
+      return;
+    }
+
+    downloadState.value.status = "failed";
+    downloadState.value.errorMessage = getFileBrowserErrorMessage(
+      err,
+      "Download failed.",
+    );
+    notifyError(downloadState.value.errorMessage);
+  } finally {
+    downloadAbortController = null;
+  }
+}
+
+function cancelDownload() {
+  downloadAbortController?.abort();
 }
 
 function downloadSelectedItems() {
-  startMockDownload(selectedRows.value);
+  void startFileDownload(selectedRows.value);
 }
 
 function downloadFromContext(row: FileBrowserItem) {
   const selected = selectedRows.value;
   const inSelection = selected.some((s) => s.id === row.id);
-  startMockDownload(inSelection && selected.length > 0 ? selected : [row]);
+  void startFileDownload(inSelection && selected.length > 0 ? selected : [row]);
 }
 
 function setPath(path: string) {
@@ -690,17 +795,18 @@ function queueFilesForUpload(files: File[]) {
     return;
   }
 
-  const skippedOversized = batch.filter(
-    (f) => f.size > MAX_UPLOAD_FILE_SIZE_BYTES,
-  ).length;
-  const sizeOk = batch.filter((f) => f.size <= MAX_UPLOAD_FILE_SIZE_BYTES);
+  const maxFileBytes = MAX_UPLOAD_FILE_SIZE_BYTES;
+  const skippedOversized =
+    maxFileBytes > 0 ? batch.filter((f) => f.size > maxFileBytes).length : 0;
+  const sizeOk =
+    maxFileBytes > 0 ? batch.filter((f) => f.size <= maxFileBytes) : batch;
   const toEnqueue = sizeOk.slice(0, room);
   const skippedDueToQueue = sizeOk.length - toEnqueue.length;
 
   if (skippedOversized > 0) {
     notes.push(
       `${skippedOversized} file(s) skipped — larger than ${bytes2Human(
-        MAX_UPLOAD_FILE_SIZE_BYTES,
+        maxFileBytes,
       )} each.`,
     );
   }
@@ -721,7 +827,10 @@ function queueFilesForUpload(files: File[]) {
     return;
   }
 
-  const destinationPath = currentPath.value.trim();
+  const destinationPath = normalizeAgentListPath(
+    currentPath.value.trim(),
+    agentPlatform.value,
+  );
 
   for (const file of toEnqueue) {
     const id = `up-${Date.now()}-${uploadIdSeq++}`;
@@ -730,49 +839,124 @@ function queueFilesForUpload(files: File[]) {
       file,
       name: file.name,
       sizeLabel: bytes2Human(file.size),
+      sizeBytes: file.size,
       destinationPath,
-      status: "ready",
+      status: "queued",
       progress: 0,
     };
     uploadQueue.value.push(item);
-    scheduleMockUpload(item.id);
+  }
+
+  void processUploadQueue();
+}
+
+function findUploadItem(itemId: string): UploadQueueItem | undefined {
+  return uploadQueue.value.find((i) => i.id === itemId);
+}
+
+function updateUploadProgress(
+  itemId: string,
+  progress: {
+    acceptedOffset: number;
+    committedOffset: number;
+    totalSize: number;
+  },
+): void {
+  const item = findUploadItem(itemId);
+  if (!item) return;
+  item.acceptedOffset = progress.acceptedOffset;
+  item.committedOffset = progress.committedOffset;
+  item.progress =
+    progress.totalSize > 0 ? progress.committedOffset / progress.totalSize : 0;
+}
+
+async function runSingleUpload(itemId: string): Promise<void> {
+  const item = findUploadItem(itemId);
+  if (!item || item.status !== "queued") return;
+
+  item.status = "uploading";
+  item.errorMessage = undefined;
+  item.progress = 0;
+
+  const controller = new AbortController();
+  uploadAbortControllers.set(itemId, controller);
+
+  try {
+    const result = await runFileUploadTransfer(
+      props.agent_id,
+      item.file,
+      item.destinationPath,
+      {
+        signal: controller.signal,
+        chunkSize: FILE_TRANSFER_DEFAULT_CHUNK_SIZE,
+        onProgress: (p) => updateUploadProgress(itemId, p),
+      },
+    );
+
+    const current = findUploadItem(itemId);
+    if (!current) return;
+
+    current.status = "completed";
+    current.progress = 1;
+    notifySuccess(
+      result.integrityOk
+        ? `Uploaded "${item.name}" to ${result.destinationPath}. Integrity verified.`
+        : `Uploaded "${item.name}" to ${result.destinationPath}.`,
+    );
+    await refresh();
+  } catch (err: unknown) {
+    const current = findUploadItem(itemId);
+    if (!current) return;
+
+    if (isUploadAbortError(err)) {
+      current.status = "cancelled";
+      notifyInfo(
+        `"${item.name}" stopped. Add the same file again to resume the upload.`,
+      );
+      return;
+    }
+
+    current.status = "failed";
+    current.errorMessage = getFileBrowserErrorMessage(err, "Upload failed.");
+    notifyError(`"${item.name}": ${current.errorMessage}`);
+  } finally {
+    uploadAbortControllers.delete(itemId);
   }
 }
 
-function scheduleMockUpload(itemId: string) {
-  const startDelay = 400;
-  const rampMs = 700;
+async function processUploadQueue(): Promise<void> {
+  if (uploadProcessorRunning) return;
+  uploadProcessorRunning = true;
 
-  window.setTimeout(() => {
-    const item = uploadQueue.value.find((i) => i.id === itemId);
-    if (!item || item.status !== "ready") return;
-
-    const start = performance.now();
-
-    function tick(now: number) {
-      const t = uploadQueue.value.find((i) => i.id === itemId);
-      if (!t) return;
-      if (t.status === "mock_uploaded") return;
-
-      const elapsed = now - start;
-      t.progress = Math.min(1, elapsed / rampMs);
-      if (elapsed < rampMs) {
-        requestAnimationFrame(tick);
-      } else {
-        t.progress = 1;
-        t.status = "mock_uploaded";
-      }
+  try {
+    while (true) {
+      const next = uploadQueue.value.find((i) => i.status === "queued");
+      if (!next) break;
+      await runSingleUpload(next.id);
     }
+  } finally {
+    uploadProcessorRunning = false;
+    if (uploadQueue.value.some((i) => i.status === "queued")) {
+      void processUploadQueue();
+    }
+  }
+}
 
-    requestAnimationFrame(tick);
-  }, startDelay);
+function cancelUploadItem(id: string) {
+  uploadAbortControllers.get(id)?.abort();
 }
 
 function removeUploadItem(id: string) {
+  cancelUploadItem(id);
   uploadQueue.value = uploadQueue.value.filter((i) => i.id !== id);
 }
 
 function clearUploadQueue() {
+  for (const item of uploadQueue.value) {
+    if (item.status === "uploading") {
+      uploadAbortControllers.get(item.id)?.abort();
+    }
+  }
   uploadQueue.value = [];
 }
 
