@@ -282,25 +282,40 @@ export function fileListToArray(list: FileList | null | undefined): File[] {
   return out;
 }
 
-export function uploadStatusLabel(status: "ready" | "mock_uploaded"): string {
-  if (status === "ready") return "Ready";
-  return "Mock uploaded";
+import type { UploadQueueStatus } from "@/types/filebrowser";
+
+export function uploadStatusLabel(status: UploadQueueStatus): string {
+  switch (status) {
+    case "queued":
+      return "Queued";
+    case "uploading":
+      return "Uploading";
+    case "completed":
+      return "Uploaded";
+    case "failed":
+      return "Failed";
+    case "cancelled":
+      return "Stopped";
+    default:
+      return status;
+  }
 }
 
-export function uploadStatusBadgeColor(
-  status: "ready" | "mock_uploaded",
-): string {
-  if (status === "ready") return "grey-5";
-  return "positive";
-}
-
-export function mockDownloadFileName(
-  items: FileBrowserItem[],
-  asArchive: boolean,
-): string {
-  if (asArchive) return "download.zip.mock.txt";
-  if (items.length === 1) return `${items[0].name}.mock-download.txt`;
-  return "download.mock.txt";
+export function uploadStatusBadgeColor(status: UploadQueueStatus): string {
+  switch (status) {
+    case "queued":
+      return "grey-5";
+    case "uploading":
+      return "primary";
+    case "completed":
+      return "positive";
+    case "failed":
+      return "negative";
+    case "cancelled":
+      return "warning";
+    default:
+      return "grey-5";
+  }
 }
 
 export function nameSegmentBaseRule(
