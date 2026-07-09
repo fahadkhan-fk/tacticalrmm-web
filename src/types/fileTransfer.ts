@@ -1,0 +1,80 @@
+export interface FileTransferInitUploadResponse {
+  session_id: string;
+  status: string;
+  chunk_size: number;
+  committed_offset: number;
+  resumed?: boolean;
+}
+
+export interface FileTransferUploadChunkResponse {
+  session_id: string;
+  status: string;
+  accepted_offset: number;
+  committed_offset: number;
+  chunk_start: number;
+  chunk_end: number;
+  chunk_bytes: number;
+}
+
+export interface FileTransferCompleteUploadResponse {
+  session_id: string;
+  status: string;
+  destination_path: string;
+  committed_offset: number;
+  sha256?: string;
+}
+
+export interface FileTransferInitDownloadResponse {
+  session_id: string;
+  status: string;
+  total_size: number;
+  chunk_size: number;
+  committed_offset: number;
+  resumed?: boolean;
+}
+
+export interface FileTransferCompleteDownloadResponse {
+  session_id: string;
+  status: string;
+  source_path: string;
+  committed_offset: number;
+  sha256?: string;
+}
+
+export interface FileTransferProgress {
+  acceptedOffset: number;
+  committedOffset: number;
+  totalSize: number;
+}
+
+export interface FileTransferUploadResult {
+  destinationPath: string;
+  sha256: string;
+  integrityOk: boolean;
+}
+
+export interface FileTransferDownloadResult {
+  sourcePath: string;
+  fileName: string;
+  sha256: string;
+  integrityOk: boolean;
+  bytesWritten: number;
+}
+
+export type DownloadTransferStatus =
+  | "idle"
+  | "initializing"
+  | "downloading"
+  | "completing"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export interface DownloadTransferState {
+  active: boolean;
+  fileName: string;
+  sourcePath: string;
+  progress: number;
+  status: DownloadTransferStatus;
+  errorMessage?: string;
+}

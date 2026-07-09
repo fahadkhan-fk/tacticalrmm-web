@@ -87,15 +87,23 @@ export interface BreadcrumbSegment {
   fullPath: string;
 }
 
-export type UploadQueueStatus = "ready" | "mock_uploaded";
+export type UploadQueueStatus =
+  | "queued"
+  | "uploading"
+  | "completed"
+  | "failed"
+  | "cancelled";
 
 export interface UploadQueueItem {
   id: string;
   file: File;
   name: string;
   sizeLabel: string;
+  sizeBytes: number;
   destinationPath: string;
   status: UploadQueueStatus;
-  /** 0–1 progress; mock uses a quick ramp then full */
   progress: number;
+  acceptedOffset?: number;
+  committedOffset?: number;
+  errorMessage?: string;
 }
