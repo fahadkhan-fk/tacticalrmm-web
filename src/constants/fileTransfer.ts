@@ -1,0 +1,7 @@
+export const FILE_TRANSFER_DEFAULT_CHUNK_SIZE = 8 * 1024 * 1024;
+export const FILE_TRANSFER_DOWNLOAD_CHUNK_TIMEOUT_MS = 120_000;
+export const FILE_TRANSFER_UPLOAD_CHUNK_TIMEOUT_MS = 300_000;
+export const FILE_TRANSFER_UPLOAD_RESUME_LS_KEY = "trmm-resume-up";
+export const FILE_TRANSFER_DOWNLOAD_RESUME_LS_KEY = "trmm-resume-dl";
+export const FILE_TRANSFER_DOWNLOAD_IDB_NAME = "trmm-transfer";
+export const FILE_TRANSFER_DOWNLOAD_IDB_STORE = "handles";

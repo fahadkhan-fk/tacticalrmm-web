@@ -9,10 +9,11 @@ import {
   typeSortLabel,
 } from "@/utils/filebrowser";
 
+export const MAX_UPLOAD_FILE_SIZE_BYTES = 0;
 export const MAX_UPLOAD_FILES_PER_SELECTION = 100;
-export const MAX_DELETE_PATHS_PER_REQUEST = 100;
-export const MAX_UPLOAD_FILE_SIZE_BYTES = 100 * 1024 * 1024; // 100 MiB per file
 export const MAX_UPLOAD_QUEUE_ITEMS = 500;
+export const MAX_DELETE_PATHS_PER_REQUEST = 100;
+
 export const FILE_BROWSER_MAX_NAME_LENGTH = 255;
 export const FILE_BROWSER_INVALID_NAME_CHARS = /[\\/:*?"<>|\x00-\x1f]/;
 
