@@ -162,6 +162,7 @@ import {
   isFileDrag,
   isListFilesAgentOfflineError,
   isListFilesPermissionError,
+  listUploadNameConflicts,
   mapApiItemToFileBrowserItem,
   mapApiItemsToFileBrowserItems,
   normalizeAgentListPath,
@@ -769,11 +770,37 @@ function onFileInputChange(event: Event) {
   const input = event.target as HTMLInputElement;
   const files = fileListToArray(input.files);
   if (!files.length) return;
-  queueFilesForUpload(files);
+  void queueFilesForUpload(files);
   input.value = "";
 }
 
-function queueFilesForUpload(files: File[]) {
+function confirmUploadOverwrite(conflicts: File[]): Promise<boolean> {
+  const names = conflicts.map((f) => f.name);
+  const preview =
+    names.length <= 3 ? names.join(", ") : `${names.slice(0, 3).join(", ")}, …`;
+  const message =
+    conflicts.length === 1
+      ? `"${names[0]}" already exists in this folder. Replace it?`
+      : `${conflicts.length} files already exist in this folder (${preview}). Replace them?`;
+
+  return new Promise((resolve) => {
+    $q.dialog({
+      title:
+        conflicts.length === 1
+          ? "Replace existing file?"
+          : "Replace existing files?",
+      message,
+      cancel: true,
+      persistent: true,
+      ok: { label: "Replace", color: "primary" },
+      cancel: { label: "Skip", flat: true, color: "primary" },
+    })
+      .onOk(() => resolve(true))
+      .onCancel(() => resolve(false));
+  });
+}
+
+async function queueFilesForUpload(files: File[]) {
   if (!assertUploadPath()) return;
   if (!files.length) return;
 
@@ -825,6 +852,26 @@ function queueFilesForUpload(files: File[]) {
       notifyWarning("No files could be added to the upload queue.");
     }
     return;
+  }
+
+  const conflicts = listUploadNameConflicts(
+    toEnqueue,
+    rows.value,
+    agentPlatform.value,
+  );
+  if (conflicts.length > 0) {
+    const replace = await confirmUploadOverwrite(conflicts);
+    if (!replace) {
+      const conflictSet = new Set(conflicts);
+      toEnqueue = toEnqueue.filter((f) => !conflictSet.has(f));
+      if (!toEnqueue.length) {
+        notifyInfo("Upload skipped — existing files were not replaced.");
+        return;
+      }
+      notifyInfo(
+        "Skipped files that already exist. Uploading the remaining items.",
+      );
+    }
   }
 
   const destinationPath = normalizeAgentListPath(
@@ -999,7 +1046,7 @@ function onDrop(event: DragEvent) {
   const files = fileListToArray(event.dataTransfer?.files);
   if (!files.length) return;
 
-  queueFilesForUpload(files);
+  void queueFilesForUpload(files);
 }
 </script>
 

@@ -1,4 +1,8 @@
-import type { FileBrowserApiItem, FileBrowserItem } from "@/types/filebrowser";
+import type {
+  FileBrowserApiItem,
+  FileBrowserItem,
+  UploadQueueStatus,
+} from "@/types/filebrowser";
 import {
   FILE_BROWSER_INVALID_NAME_CHARS,
   FILE_BROWSER_MAX_NAME_LENGTH,
@@ -282,7 +286,27 @@ export function fileListToArray(list: FileList | null | undefined): File[] {
   return out;
 }
 
-import type { UploadQueueStatus } from "@/types/filebrowser";
+export function fileNamesMatch(
+  a: string,
+  b: string,
+  platform: string,
+): boolean {
+  if (platform === "windows") {
+    return a.toLowerCase() === b.toLowerCase();
+  }
+  return a === b;
+}
+
+export function listUploadNameConflicts(
+  files: File[],
+  rows: FileBrowserItem[],
+  platform: string,
+): File[] {
+  const existingFiles = rows.filter((row) => row.type === "file");
+  return files.filter((file) =>
+    existingFiles.some((row) => fileNamesMatch(row.name, file.name, platform)),
+  );
+}
 
 export function uploadStatusLabel(status: UploadQueueStatus): string {
   switch (status) {
