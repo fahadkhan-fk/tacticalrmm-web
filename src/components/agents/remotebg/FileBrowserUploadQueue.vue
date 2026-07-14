@@ -1,6 +1,6 @@
 <template>
   <div
-    class="upload-queue-section q-mb-sm"
+    class="upload-queue-section"
     :class="{ 'upload-queue-section--dark': $q.dark.isActive }"
   >
     <div class="row items-center justify-between q-mb-xs">

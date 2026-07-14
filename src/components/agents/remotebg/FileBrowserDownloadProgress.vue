@@ -1,6 +1,6 @@
 <template>
   <div
-    class="download-progress-section q-mb-sm"
+    class="download-progress-section"
     :class="{ 'download-progress-section--dark': $q.dark.isActive }"
   >
     <div class="row items-center justify-between q-mb-xs">

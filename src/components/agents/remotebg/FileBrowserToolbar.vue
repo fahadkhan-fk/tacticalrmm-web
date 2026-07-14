@@ -148,7 +148,6 @@ function onSearchUpdate(val: string | number | null) {
 
 <style scoped>
 .file-toolbar {
-  padding: 0 0 12px 0;
   gap: 12px;
 }
 

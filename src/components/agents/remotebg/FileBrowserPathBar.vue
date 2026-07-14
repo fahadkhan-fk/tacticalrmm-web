@@ -1,6 +1,6 @@
 <template>
   <div
-    class="row items-center q-mb-sm file-path-row"
+    class="row items-center file-path-row"
     :class="{ 'file-path-row--dark': $q.dark.isActive }"
   >
     <q-btn

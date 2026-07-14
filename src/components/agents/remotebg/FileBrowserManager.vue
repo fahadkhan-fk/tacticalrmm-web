@@ -1062,5 +1062,6 @@ function onDrop(event: DragEvent) {
 .file-browser {
   height: calc(100vh - 80px);
   overflow: hidden;
+  gap: 12px;
 }
 </style>
