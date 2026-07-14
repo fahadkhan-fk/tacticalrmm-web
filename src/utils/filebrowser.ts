@@ -1,4 +1,6 @@
 import type {
+  DownloadQueueStatus,
+  DownloadSelectionMode,
   FileBrowserApiItem,
   FileBrowserItem,
   UploadQueueStatus,
@@ -6,6 +8,7 @@ import type {
 import {
   FILE_BROWSER_INVALID_NAME_CHARS,
   FILE_BROWSER_MAX_NAME_LENGTH,
+  MAX_SEQUENTIAL_DOWNLOAD_FILES,
 } from "@/constants/filebrowser";
 import { bytes2Human, formatDate } from "@/utils/format";
 import { AxiosError } from "axios";
@@ -340,6 +343,94 @@ export function uploadStatusBadgeColor(status: UploadQueueStatus): string {
     default:
       return "grey-5";
   }
+}
+
+export function classifyDownloadSelection(items: FileBrowserItem[]): {
+  mode: DownloadSelectionMode;
+  files: FileBrowserItem[];
+  folderCount: number;
+  fileCount: number;
+} {
+  if (!items.length) {
+    return { mode: "none", files: [], folderCount: 0, fileCount: 0 };
+  }
+
+  const folders = items.filter((item) => item.type === "folder");
+  const files = items.filter((item) => item.type === "file");
+  const folderCount = folders.length;
+  const fileCount = files.length;
+
+  if (folderCount > 0 || fileCount > MAX_SEQUENTIAL_DOWNLOAD_FILES) {
+    return { mode: "zip", files, folderCount, fileCount };
+  }
+  if (fileCount === 1) {
+    return { mode: "single", files, folderCount, fileCount };
+  }
+  if (fileCount >= 2) {
+    return { mode: "sequential", files, folderCount, fileCount };
+  }
+
+  return { mode: "none", files: [], folderCount, fileCount: 0 };
+}
+
+export function downloadStatusLabel(status: DownloadQueueStatus): string {
+  switch (status) {
+    case "queued":
+      return "Queued";
+    case "initializing":
+      return "Initialising…";
+    case "downloading":
+      return "Downloading…";
+    case "completing":
+      return "Verifying…";
+    case "completed":
+      return "Downloaded";
+    case "failed":
+      return "Failed";
+    case "cancelled":
+      return "Stopped";
+    default:
+      return status;
+  }
+}
+
+export function downloadStatusBadgeColor(status: DownloadQueueStatus): string {
+  switch (status) {
+    case "queued":
+      return "grey-5";
+    case "initializing":
+    case "downloading":
+    case "completing":
+      return "primary";
+    case "completed":
+      return "positive";
+    case "failed":
+      return "negative";
+    case "cancelled":
+      return "warning";
+    default:
+      return "grey-5";
+  }
+}
+
+export function canRemoveDownloadQueueItem(
+  status: DownloadQueueStatus,
+): boolean {
+  return (
+    status !== "downloading" &&
+    status !== "initializing" &&
+    status !== "completing"
+  );
+}
+
+export function isDownloadQueueItemActive(
+  status: DownloadQueueStatus,
+): boolean {
+  return (
+    status === "initializing" ||
+    status === "downloading" ||
+    status === "completing"
+  );
 }
 
 export function nameSegmentBaseRule(
