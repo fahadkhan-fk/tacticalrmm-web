@@ -51,12 +51,22 @@
     />
 
     <FileBrowserDownloadProgress
-      v-if="downloadState.active"
-      :file-name="downloadState.fileName"
-      :progress="downloadState.progress"
-      :status="downloadState.status"
-      :error-message="downloadState.errorMessage"
-      @cancel="cancelDownload"
+      v-if="activeSingleDownloadItem"
+      :file-name="activeSingleDownloadItem.name"
+      :progress="activeSingleDownloadItem.progress"
+      :status="singleDownloadProgressStatus"
+      :error-message="activeSingleDownloadItem.errorMessage"
+      @cancel="cancelDownloadItem(activeSingleDownloadItem.id)"
+    />
+
+    <FileBrowserDownloadQueue
+      v-if="showDownloadQueuePanel"
+      :items="downloadQueue"
+      :summary-caption="downloadQueueSummary ?? undefined"
+      @clear-finished="clearFinishedDownloads"
+      @stop-all="stopAllDownloads"
+      @remove="removeDownloadItem"
+      @cancel="cancelDownloadItem"
     />
 
     <FileBrowserTable
@@ -123,6 +133,7 @@ import {
   renameAgentFile,
 } from "@/api/agents";
 import FileBrowserDownloadProgress from "@/components/agents/remotebg/FileBrowserDownloadProgress.vue";
+import FileBrowserDownloadQueue from "@/components/agents/remotebg/FileBrowserDownloadQueue.vue";
 import FileBrowserNewFolderModal from "@/components/agents/remotebg/FileBrowserNewFolderModal.vue";
 import FileBrowserPathBar from "@/components/agents/remotebg/FileBrowserPathBar.vue";
 import FileBrowserPropertiesDialog from "@/components/agents/remotebg/FileBrowserPropertiesDialog.vue";
@@ -134,12 +145,15 @@ import ConfirmDialog from "@/components/ui/ConfirmDialog.vue";
 import { useFileBrowser } from "@/composables/filebrowser";
 import {
   MAX_DELETE_PATHS_PER_REQUEST,
+  MAX_DOWNLOAD_QUEUE_ITEMS,
+  MAX_SEQUENTIAL_DOWNLOAD_FILES,
   MAX_UPLOAD_FILE_SIZE_BYTES,
   MAX_UPLOAD_FILES_PER_SELECTION,
   MAX_UPLOAD_QUEUE_ITEMS,
 } from "@/constants/filebrowser";
 import { FILE_TRANSFER_DEFAULT_CHUNK_SIZE } from "@/constants/fileTransfer";
 import type {
+  DownloadQueueItem,
   FileBrowserDeleteResult,
   FileBrowserItem,
   UploadQueueItem,
@@ -152,16 +166,18 @@ import {
   isAbortError as isUploadAbortError,
   runFileUploadTransfer,
 } from "@/services/fileTransfer/upload";
-import type { DownloadTransferState } from "@/types/fileTransfer";
+import type { DownloadTransferStatus } from "@/types/fileTransfer";
 import { bytes2Human } from "@/utils/format";
 import {
   defaultFileBrowserRootPath,
   fileListToArray,
+  classifyDownloadSelection,
   getFileBrowserErrorMessage,
   getListFilesErrorMessage,
   isFileDrag,
   isListFilesAgentOfflineError,
   isListFilesPermissionError,
+  isDownloadQueueItemActive,
   listUploadNameConflicts,
   mapApiItemToFileBrowserItem,
   mapApiItemsToFileBrowserItems,
@@ -225,20 +241,32 @@ const uploadAbortControllers = new Map<string, AbortController>();
 let uploadProcessorRunning = false;
 let uploadIdSeq = 0;
 
-const downloadState = ref<DownloadTransferState>({
-  active: false,
-  fileName: "",
-  sourcePath: "",
-  progress: 0,
-  status: "idle",
-});
-let downloadAbortController: AbortController | null = null;
+const downloadQueue = ref<DownloadQueueItem[]>([]);
+const downloadQueueSummary = ref<string | null>(null);
+const downloadAbortControllers = new Map<string, AbortController>();
+let downloadProcessorRunning = false;
+let downloadIdSeq = 0;
+let downloadStopAllRequested = false;
 let loadSeq = 0;
 
 const mutationSaving = ref(false);
 
 const uploadQueueItems = computed<UploadQueueItem[]>(() => uploadQueue.value);
 const hasUploadPath = computed(() => currentPath.value.trim().length > 0);
+
+const activeSingleDownloadItem = computed(() => {
+  if (downloadQueue.value.length !== 1) return null;
+  return downloadQueue.value[0];
+});
+
+const showDownloadQueuePanel = computed(() => downloadQueue.value.length >= 2);
+
+const singleDownloadProgressStatus = computed((): DownloadTransferStatus => {
+  const item = activeSingleDownloadItem.value;
+  if (!item) return "idle";
+  if (item.status === "queued") return "initializing";
+  return item.status as DownloadTransferStatus;
+});
 
 const rows = ref<FileBrowserItem[]>([]);
 
@@ -533,112 +561,398 @@ async function confirmDelete() {
   }
 }
 
-function resolveDownloadItems(items: FileBrowserItem[]): FileBrowserItem[] {
-  if (!items.length) return [];
-  const files = items.filter((item) => item.type === "file");
-  const folders = items.filter((item) => item.type === "folder");
-  if (folders.length > 0) {
-    notifyWarning(
-      "Folder download is not available yet. Select a single file to download.",
-    );
-    return [];
-  }
-  if (files.length !== 1) {
-    notifyWarning("Select exactly one file to download.");
-    return [];
-  }
-  return files;
+function isDownloadProcessorBusy(): boolean {
+  return (
+    downloadProcessorRunning ||
+    downloadQueue.value.some((item) => isDownloadQueueItemActive(item.status))
+  );
 }
 
-async function startFileDownload(items: FileBrowserItem[]) {
-  const targets = resolveDownloadItems(items);
-  if (!targets.length) return;
+function findDownloadItem(itemId: string): DownloadQueueItem | undefined {
+  return downloadQueue.value.find((item) => item.id === itemId);
+}
 
-  if (
-    downloadState.value.active &&
-    (downloadState.value.status === "initializing" ||
-      downloadState.value.status === "downloading" ||
-      downloadState.value.status === "completing")
-  ) {
-    notifyWarning("A download is already in progress.");
+function offerZipDownloadDialog(selection: {
+  folderCount: number;
+  fileCount: number;
+}): Promise<boolean> {
+  const parts: string[] = [];
+  if (selection.folderCount > 0) {
+    parts.push(
+      selection.folderCount === 1
+        ? "1 folder"
+        : `${selection.folderCount} folders`,
+    );
+  }
+  if (selection.fileCount > 0) {
+    parts.push(
+      selection.fileCount === 1 ? "1 file" : `${selection.fileCount} files`,
+    );
+  }
+  const summary = parts.join(" and ");
+  const reason =
+    selection.folderCount > 0 &&
+    selection.fileCount > MAX_SEQUENTIAL_DOWNLOAD_FILES
+      ? "Folders and large multi-file selections are downloaded as a single ZIP archive."
+      : selection.folderCount > 0
+        ? "Folders are downloaded as a single ZIP archive."
+        : `More than ${MAX_SEQUENTIAL_DOWNLOAD_FILES} files are downloaded as a single ZIP archive.`;
+
+  return new Promise((resolve) => {
+    $q.dialog({
+      title: "Download as ZIP?",
+      message: `${summary} selected. ${reason}`,
+      cancel: true,
+      persistent: true,
+      ok: { label: "Download ZIP", color: "primary" },
+      cancel: { label: "Cancel", flat: true, color: "primary" },
+    })
+      .onOk(() => resolve(true))
+      .onCancel(() => resolve(false));
+  });
+}
+
+function startZipDownload() {
+  notifyInfo(
+    "ZIP download is not available yet. Select up to 10 individual files, or continue when folder download (Phase E2) is enabled.",
+  );
+}
+
+async function confirmContinueAfterDownloadFailure(
+  item: DownloadQueueItem,
+): Promise<boolean> {
+  const remaining = downloadQueue.value.filter(
+    (entry) => entry.status === "queued",
+  ).length;
+  if (remaining === 0) return false;
+
+  const detail = item.errorMessage
+    ? `"${item.name}": ${item.errorMessage}`
+    : `"${item.name}" failed.`;
+
+  return new Promise((resolve) => {
+    $q.dialog({
+      title: "Download failed",
+      message: `${detail}\n\nContinue with the remaining ${remaining} file(s)?`,
+      cancel: true,
+      persistent: true,
+      ok: { label: "Continue", color: "primary" },
+      cancel: { label: "Stop", flat: true, color: "negative" },
+    })
+      .onOk(() => resolve(true))
+      .onCancel(() => resolve(false));
+  });
+}
+
+function cancelRemainingDownloads() {
+  downloadStopAllRequested = true;
+  for (const item of downloadQueue.value) {
+    if (item.status === "queued") {
+      item.status = "cancelled";
+    }
+  }
+}
+
+function notifyDownloadBatchSummary(
+  succeeded: number,
+  failed: number,
+  cancelled: number,
+) {
+  const total = succeeded + failed + cancelled;
+  if (total === 0) return;
+
+  if (failed === 0 && cancelled === 0) {
+    if (succeeded === 1) {
+      notifySuccess("Download complete.");
+      downloadQueueSummary.value = "All downloads finished successfully.";
+      return;
+    }
+    notifySuccess(`Downloaded ${succeeded} files.`);
+    downloadQueueSummary.value = `All ${succeeded} downloads finished successfully.`;
     return;
   }
 
-  const item = targets[0];
-  downloadAbortController?.abort();
-  downloadAbortController = new AbortController();
-  const signal = downloadAbortController.signal;
+  if (succeeded === 0 && failed > 0 && cancelled === 0) {
+    notifyError(
+      failed === 1 ? "Download failed." : `All ${failed} downloads failed.`,
+    );
+    downloadQueueSummary.value =
+      failed === 1 ? "Download failed." : `All ${failed} downloads failed.`;
+    return;
+  }
 
-  downloadState.value = {
-    active: true,
-    fileName: item.name,
-    sourcePath: item.path,
-    progress: 0,
-    status: "initializing",
-  };
+  const parts: string[] = [];
+  if (succeeded > 0) parts.push(`${succeeded} succeeded`);
+  if (failed > 0) parts.push(`${failed} failed`);
+  if (cancelled > 0) parts.push(`${cancelled} stopped`);
+
+  downloadQueueSummary.value = `Finished: ${parts.join(", ")}.`;
+  notifyWarning(`Downloads finished: ${parts.join(", ")}.`);
+}
+
+function enqueueDownloads(files: FileBrowserItem[]) {
+  if (!files.length) return;
+
+  if (isDownloadProcessorBusy()) {
+    notifyWarning("Downloads are already in progress.");
+    return;
+  }
+
+  const room = MAX_DOWNLOAD_QUEUE_ITEMS - downloadQueue.value.length;
+  if (room <= 0) {
+    notifyWarning(
+      `The download queue is full (max ${MAX_DOWNLOAD_QUEUE_ITEMS} items). Clear finished items first.`,
+    );
+    return;
+  }
+
+  let batch = files;
+  if (batch.length > room) {
+    notifyWarning(
+      `Only the first ${room} of ${batch.length} files were queued (queue limit).`,
+    );
+    batch = batch.slice(0, room);
+  }
+
+  downloadQueueSummary.value = null;
+  downloadStopAllRequested = false;
+
+  for (const file of batch) {
+    const id = `dl-${Date.now()}-${downloadIdSeq++}`;
+    downloadQueue.value.push({
+      id,
+      name: file.name,
+      sourcePath: file.path,
+      status: "queued",
+      progress: 0,
+    });
+  }
+
+  void processDownloadQueue();
+}
+
+async function runSingleDownload(itemId: string): Promise<void> {
+  const item = findDownloadItem(itemId);
+  if (!item || item.status !== "queued") return;
+
+  item.status = "initializing";
+  item.errorMessage = undefined;
+  item.progress = 0;
+
+  const controller = new AbortController();
+  downloadAbortControllers.set(itemId, controller);
 
   try {
-    const result = await runFileDownloadTransfer(props.agent_id, item.path, {
-      signal,
-      chunkSize: FILE_TRANSFER_DEFAULT_CHUNK_SIZE,
-      onProgress: ({ committedOffset, totalSize }) => {
-        downloadState.value.progress =
-          totalSize > 0 ? committedOffset / totalSize : 0;
-        if (downloadState.value.status === "initializing") {
-          downloadState.value.status = "downloading";
-        }
+    const result = await runFileDownloadTransfer(
+      props.agent_id,
+      item.sourcePath,
+      {
+        signal: controller.signal,
+        chunkSize: FILE_TRANSFER_DEFAULT_CHUNK_SIZE,
+        onProgress: ({ committedOffset, totalSize }) => {
+          const current = findDownloadItem(itemId);
+          if (!current) return;
+          current.progress = totalSize > 0 ? committedOffset / totalSize : 0;
+          if (current.status === "initializing") {
+            current.status = "downloading";
+          }
+        },
+        onStatus: (status) => {
+          const current = findDownloadItem(itemId);
+          if (!current) return;
+          current.status = status;
+        },
       },
-      onStatus: (status) => {
-        downloadState.value.status = status;
-      },
-    });
-
-    downloadState.value.progress = 1;
-    downloadState.value.status = "completed";
-    notifySuccess(
-      result.integrityOk
-        ? `Downloaded "${result.fileName}" (${bytes2Human(result.bytesWritten)}). Integrity verified.`
-        : `Downloaded "${result.fileName}" (${bytes2Human(result.bytesWritten)}).`,
     );
 
-    window.setTimeout(() => {
-      if (downloadState.value.status === "completed") {
-        downloadState.value.active = false;
-        downloadState.value.status = "idle";
-      }
-    }, 4000);
-  } catch (err: unknown) {
-    if (isDownloadAbortError(err)) {
-      downloadState.value.status = "cancelled";
-      notifyInfo(
-        "Download stopped. Click Download again on the same file to resume.",
+    const current = findDownloadItem(itemId);
+    if (!current) return;
+
+    current.status = "completed";
+    current.progress = 1;
+
+    if (downloadQueue.value.length === 1) {
+      notifySuccess(
+        result.integrityOk
+          ? `Downloaded "${result.fileName}" (${bytes2Human(result.bytesWritten)}). Integrity verified.`
+          : `Downloaded "${result.fileName}" (${bytes2Human(result.bytesWritten)}).`,
       );
+      window.setTimeout(() => {
+        if (
+          downloadQueue.value.length === 1 &&
+          downloadQueue.value[0]?.id === itemId &&
+          downloadQueue.value[0]?.status === "completed"
+        ) {
+          downloadQueue.value = [];
+        }
+      }, 4000);
+    }
+  } catch (err: unknown) {
+    const current = findDownloadItem(itemId);
+    if (!current) return;
+
+    if (isDownloadAbortError(err)) {
+      current.status = "cancelled";
+      if (downloadQueue.value.length === 1) {
+        notifyInfo(
+          "Download stopped. Click Download again on the same file to resume.",
+        );
+      }
       return;
     }
 
-    downloadState.value.status = "failed";
-    downloadState.value.errorMessage = getFileBrowserErrorMessage(
-      err,
-      "Download failed.",
-    );
-    notifyError(downloadState.value.errorMessage);
+    current.status = "failed";
+    current.errorMessage = getFileBrowserErrorMessage(err, "Download failed.");
+    if (downloadQueue.value.length === 1) {
+      notifyError(current.errorMessage);
+    }
   } finally {
-    downloadAbortController = null;
+    downloadAbortControllers.delete(itemId);
   }
 }
 
-function cancelDownload() {
-  downloadAbortController?.abort();
+async function processDownloadQueue(): Promise<void> {
+  if (downloadProcessorRunning) return;
+  downloadProcessorRunning = true;
+
+  const batchIdSet = new Set(
+    downloadQueue.value
+      .filter(
+        (item) =>
+          item.status === "queued" || isDownloadQueueItemActive(item.status),
+      )
+      .map((item) => item.id),
+  );
+
+  try {
+    while (true) {
+      if (downloadStopAllRequested) {
+        cancelRemainingDownloads();
+        break;
+      }
+
+      const next = downloadQueue.value.find((item) => item.status === "queued");
+      if (!next) break;
+
+      await runSingleDownload(next.id);
+
+      const current = findDownloadItem(next.id);
+      if (!current) continue;
+
+      if (current.status === "cancelled") {
+        break;
+      }
+
+      if (current.status === "failed") {
+        if (downloadStopAllRequested) break;
+
+        const shouldContinue =
+          await confirmContinueAfterDownloadFailure(current);
+        if (!shouldContinue) {
+          cancelRemainingDownloads();
+          break;
+        }
+      }
+    }
+  } finally {
+    downloadProcessorRunning = false;
+    downloadStopAllRequested = false;
+
+    if (downloadQueue.value.length >= 2 && batchIdSet.size > 0) {
+      const batchItems = downloadQueue.value.filter((item) =>
+        batchIdSet.has(item.id),
+      );
+      const succeeded = batchItems.filter(
+        (item) => item.status === "completed",
+      ).length;
+      const failed = batchItems.filter(
+        (item) => item.status === "failed",
+      ).length;
+      const cancelled = batchItems.filter(
+        (item) => item.status === "cancelled",
+      ).length;
+      notifyDownloadBatchSummary(succeeded, failed, cancelled);
+    }
+
+    if (downloadQueue.value.some((item) => item.status === "queued")) {
+      void processDownloadQueue();
+    }
+  }
+}
+
+function cancelDownloadItem(id: string) {
+  downloadAbortControllers.get(id)?.abort();
+  const item = findDownloadItem(id);
+  if (item && item.status === "queued") {
+    item.status = "cancelled";
+  }
+}
+
+function removeDownloadItem(id: string) {
+  cancelDownloadItem(id);
+  downloadQueue.value = downloadQueue.value.filter((item) => item.id !== id);
+}
+
+function clearFinishedDownloads() {
+  downloadQueue.value = downloadQueue.value.filter(
+    (item) =>
+      item.status !== "completed" &&
+      item.status !== "failed" &&
+      item.status !== "cancelled",
+  );
+  if (!downloadQueue.value.length) {
+    downloadQueueSummary.value = null;
+  }
+}
+
+function stopAllDownloads() {
+  downloadStopAllRequested = true;
+  for (const item of downloadQueue.value) {
+    if (isDownloadQueueItemActive(item.status)) {
+      downloadAbortControllers.get(item.id)?.abort();
+    } else if (item.status === "queued") {
+      item.status = "cancelled";
+    }
+  }
+}
+
+async function startDownloads(items: FileBrowserItem[]) {
+  if (!items.length) {
+    notifyWarning("Select one or more items to download.");
+    return;
+  }
+
+  const selection = classifyDownloadSelection(items);
+
+  if (selection.mode === "none") {
+    notifyWarning("Select one or more items to download.");
+    return;
+  }
+
+  if (selection.mode === "zip") {
+    const proceed = await offerZipDownloadDialog(selection);
+    if (proceed) {
+      startZipDownload();
+    }
+    return;
+  }
+
+  if (selection.mode === "single") {
+    enqueueDownloads(selection.files);
+    return;
+  }
+
+  enqueueDownloads(selection.files);
 }
 
 function downloadSelectedItems() {
-  void startFileDownload(selectedRows.value);
+  void startDownloads(selectedRows.value);
 }
 
 function downloadFromContext(row: FileBrowserItem) {
   const selected = selectedRows.value;
   const inSelection = selected.some((s) => s.id === row.id);
-  void startFileDownload(inSelection && selected.length > 0 ? selected : [row]);
+  void startDownloads(inSelection && selected.length > 0 ? selected : [row]);
 }
 
 function setPath(path: string) {
