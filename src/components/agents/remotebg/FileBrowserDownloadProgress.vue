@@ -17,6 +17,15 @@
         label="Stop"
         @click="emit('cancel')"
       />
+      <q-btn
+        v-else-if="canDismiss"
+        dense
+        flat
+        no-caps
+        size="sm"
+        label="Dismiss"
+        @click="emit('dismiss')"
+      />
     </div>
     <div class="text-caption download-progress-file q-mb-xs ellipsis">
       {{ fileName }}
@@ -56,6 +65,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: "cancel"): void;
+  (e: "dismiss"): void;
 }>();
 
 const canCancel = computed(
@@ -63,6 +73,13 @@ const canCancel = computed(
     props.status === "initializing" ||
     props.status === "downloading" ||
     props.status === "completing",
+);
+
+const canDismiss = computed(
+  () =>
+    props.status === "completed" ||
+    props.status === "failed" ||
+    props.status === "cancelled",
 );
 
 const progressPercent = computed(() => Math.round(props.progress * 100));
