@@ -107,3 +107,23 @@ export interface UploadQueueItem {
   committedOffset?: number;
   errorMessage?: string;
 }
+
+export type DownloadQueueStatus =
+  | "queued"
+  | "initializing"
+  | "downloading"
+  | "completing"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export interface DownloadQueueItem {
+  id: string;
+  name: string;
+  sourcePath: string;
+  status: DownloadQueueStatus;
+  progress: number;
+  errorMessage?: string;
+}
+
+export type DownloadSelectionMode = "none" | "single" | "sequential" | "zip";
