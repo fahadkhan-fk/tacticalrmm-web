@@ -56,6 +56,10 @@
       :progress="activeSingleDownloadItem.progress"
       :status="singleDownloadProgressStatus"
       :error-message="activeSingleDownloadItem.errorMessage"
+      :building-archive="
+        activeSingleDownloadItem.kind === 'archive' &&
+        activeSingleDownloadItem.status === 'initializing'
+      "
       @cancel="cancelDownloadItem(activeSingleDownloadItem.id)"
       @dismiss="dismissDownloadUi"
     />
@@ -145,6 +149,7 @@ import FileBrowserUploadQueue from "@/components/agents/remotebg/FileBrowserUplo
 import ConfirmDialog from "@/components/ui/ConfirmDialog.vue";
 import { useFileBrowser } from "@/composables/filebrowser";
 import {
+  MAX_ARCHIVE_PATHS,
   MAX_DELETE_PATHS_PER_REQUEST,
   MAX_DOWNLOAD_QUEUE_ITEMS,
   MAX_SEQUENTIAL_DOWNLOAD_FILES,
@@ -161,6 +166,7 @@ import type {
 } from "@/types/filebrowser";
 import {
   isAbortError as isDownloadAbortError,
+  runArchiveDownloadTransfer,
   runFileDownloadTransfer,
 } from "@/services/fileTransfer/download";
 import {
@@ -173,6 +179,7 @@ import {
   defaultFileBrowserRootPath,
   fileListToArray,
   classifyDownloadSelection,
+  deriveArchiveDownloadName,
   getFileBrowserErrorMessage,
   getListFilesErrorMessage,
   isFileDrag,
@@ -658,10 +665,43 @@ function offerZipDownloadDialog(selection: {
   });
 }
 
-function startZipDownload() {
-  notifyInfo(
-    "ZIP download is not available yet. Select up to 10 individual files, or continue when folder download (Phase E2) is enabled.",
-  );
+function startZipDownload(items: FileBrowserItem[]) {
+  if (!items.length) {
+    notifyWarning("Select one or more items to download.");
+    return;
+  }
+
+  if (items.length > MAX_ARCHIVE_PATHS) {
+    notifyWarning(
+      `Select at most ${MAX_ARCHIVE_PATHS} items for archive download.`,
+    );
+    return;
+  }
+
+  if (isDownloadProcessorBusy()) {
+    notifyWarning("Downloads are already in progress.");
+    return;
+  }
+
+  pruneFinishedDownloadsBeforeNewBatch();
+
+  const archiveName = deriveArchiveDownloadName(items);
+  downloadQueueSummary.value = null;
+  downloadStopAllRequested = false;
+  downloadBatchIsSingle.value = true;
+
+  const id = `dl-${Date.now()}-${downloadIdSeq++}`;
+  downloadQueue.value.push({
+    id,
+    name: archiveName,
+    sourcePath: items[0].path,
+    kind: "archive",
+    archivePaths: items.map((item) => item.path),
+    status: "queued",
+    progress: 0,
+  });
+
+  void processDownloadQueue();
 }
 
 async function confirmContinueAfterDownloadFailure(
@@ -792,33 +832,66 @@ async function runSingleDownload(itemId: string): Promise<void> {
   downloadAbortControllers.set(itemId, controller);
 
   try {
-    const result = await runFileDownloadTransfer(
-      props.agent_id,
-      item.sourcePath,
-      {
-        signal: controller.signal,
-        chunkSize: FILE_TRANSFER_DEFAULT_CHUNK_SIZE,
-        onProgress: ({ committedOffset, totalSize }) => {
-          const current = findDownloadItem(itemId);
-          if (!current) return;
-          current.progress = totalSize > 0 ? committedOffset / totalSize : 0;
-          if (current.status === "initializing") {
-            current.status = "downloading";
-          }
-        },
-        onStatus: (status) => {
-          const current = findDownloadItem(itemId);
-          if (!current) return;
-          current.status = status;
-        },
+    const transferOptions = {
+      signal: controller.signal,
+      chunkSize: FILE_TRANSFER_DEFAULT_CHUNK_SIZE,
+      onProgress: ({
+        committedOffset,
+        totalSize,
+      }: {
+        committedOffset: number;
+        totalSize: number;
+      }) => {
+        const current = findDownloadItem(itemId);
+        if (!current) return;
+        current.progress = totalSize > 0 ? committedOffset / totalSize : 0;
+        if (current.status === "initializing") {
+          current.status = "downloading";
+        }
       },
-    );
+      onStatus: (status: "initializing" | "downloading" | "completing") => {
+        const current = findDownloadItem(itemId);
+        if (!current) return;
+        current.status = status;
+      },
+    };
+
+    const result =
+      item.kind === "archive" && item.archivePaths?.length
+        ? await runArchiveDownloadTransfer(
+            props.agent_id,
+            item.archivePaths,
+            item.name,
+            {
+              ...transferOptions,
+              onArchiveBuilding: () => {
+                const current = findDownloadItem(itemId);
+                if (current) current.status = "initializing";
+              },
+            },
+          )
+        : await runFileDownloadTransfer(
+            props.agent_id,
+            item.sourcePath,
+            transferOptions,
+          );
 
     const current = findDownloadItem(itemId);
     if (!current) return;
 
     current.status = "completed";
     current.progress = 1;
+
+    if (result.warnings && result.warnings.length > 0) {
+      const shown = result.warnings.slice(0, 5).join("; ");
+      const extra =
+        result.warnings.length > 5
+          ? ` (+${result.warnings.length - 5} more)`
+          : "";
+      notifyWarning(
+        `"${result.fileName}" archived with ${result.warnings.length} warning(s): ${shown}${extra}`,
+      );
+    }
 
     if (downloadBatchIsSingle.value && downloadQueue.value.length === 1) {
       notifySuccess(
@@ -976,7 +1049,7 @@ async function startDownloads(items: FileBrowserItem[]) {
   if (selection.mode === "zip") {
     const proceed = await offerZipDownloadDialog(selection);
     if (proceed) {
-      startZipDownload();
+      startZipDownload(items);
     }
     return;
   }

@@ -61,6 +61,7 @@ const props = defineProps<{
   progress: number;
   status: DownloadTransferStatus;
   errorMessage?: string;
+  buildingArchive?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -94,7 +95,7 @@ const progressColor = computed(() => {
 const statusLabel = computed(() => {
   switch (props.status) {
     case "initializing":
-      return "Initialising…";
+      return props.buildingArchive ? "Building archive…" : "Initialising…";
     case "downloading":
       return "Downloading…";
     case "completing":
