@@ -15,6 +15,11 @@ export const MAX_UPLOAD_QUEUE_ITEMS = 500;
 export const MAX_DELETE_PATHS_PER_REQUEST = 100;
 export const MAX_SEQUENTIAL_DOWNLOAD_FILES = 10;
 export const MAX_DOWNLOAD_QUEUE_ITEMS = 100;
+export const MAX_ARCHIVE_PATHS = 100;
+export const MAX_ARCHIVE_FILES = 10_000;
+export const MAX_ARCHIVE_SIZE_BYTES = 4 * 1024 * 1024 * 1024;
+export const MAX_ARCHIVE_DEPTH = 32;
+export const ARCHIVE_PREPARE_TIMEOUT_MS = 3_600_000;
 
 export const FILE_BROWSER_MAX_NAME_LENGTH = 255;
 export const FILE_BROWSER_INVALID_NAME_CHARS = /[\\/:*?"<>|\x00-\x1f]/;

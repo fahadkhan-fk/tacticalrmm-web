@@ -42,11 +42,25 @@ export function downloadResumeKey(agentId: string, sourcePath: string): string {
   return `${agentId}:${sourcePath}`;
 }
 
+export function archiveDownloadResumeKey(
+  agentId: string,
+  paths: string[],
+): string {
+  return `${agentId}:archive:${paths.slice().sort().join("\u0000")}`;
+}
+
 export function downloadHandleIdbKey(
   agentId: string,
   sourcePath: string,
 ): string {
   return `dl:${downloadResumeKey(agentId, sourcePath)}`;
+}
+
+export function archiveDownloadHandleIdbKey(
+  agentId: string,
+  paths: string[],
+): string {
+  return `dl:${archiveDownloadResumeKey(agentId, paths)}`;
 }
 
 export function loadUploadResume(

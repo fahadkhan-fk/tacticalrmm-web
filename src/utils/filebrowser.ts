@@ -433,6 +433,15 @@ export function isDownloadQueueItemActive(
   );
 }
 
+export function deriveArchiveDownloadName(items: FileBrowserItem[]): string {
+  if (items.length === 1) {
+    const base =
+      items[0].name.replace(/[\\/:*?"<>|]/g, "_").trim() || "download";
+    return base.toLowerCase().endsWith(".zip") ? base : `${base}.zip`;
+  }
+  return "download.zip";
+}
+
 export function nameSegmentBaseRule(
   v: string | number | null | undefined,
 ): true | string {
