@@ -1,4 +1,5 @@
 import {
+  cancelAgentFileUpload,
   completeAgentFileUpload,
   initAgentFileUpload,
   resumeAgentFileUpload,
@@ -22,6 +23,18 @@ export interface RunFileUploadOptions {
   signal?: AbortSignal;
   chunkSize?: number;
   onProgress?: (progress: FileTransferProgress) => void;
+}
+
+async function releaseUploadSession(
+  agentId: string,
+  sessionId: string | null | undefined,
+): Promise<void> {
+  if (!sessionId) return;
+  try {
+    await cancelAgentFileUpload(agentId, sessionId);
+  } catch {
+    // frees the server session slot for retry
+  }
 }
 
 export async function runFileUploadTransfer(
@@ -63,59 +76,67 @@ export async function runFileUploadTransfer(
   const chunkSize = initData.chunk_size;
   let offset = initData.committed_offset || 0;
 
-  const hasher = createSha256Hasher();
-  if (offset > 0) {
-    await hashFilePrefix(file, offset, chunkSize, hasher);
-    onProgress?.({
-      acceptedOffset: offset,
-      committedOffset: offset,
-      totalSize,
-    });
-  }
-
-  while (offset < totalSize) {
-    if (signal?.aborted) {
-      throw new DOMException("Upload aborted", "AbortError");
+  try {
+    const hasher = createSha256Hasher();
+    if (offset > 0) {
+      await hashFilePrefix(file, offset, chunkSize, hasher);
+      onProgress?.({
+        acceptedOffset: offset,
+        committedOffset: offset,
+        totalSize,
+      });
     }
 
-    const blob = file.slice(offset, offset + chunkSize);
-    const end = offset + blob.size - 1;
-    hashBytes(hasher, await blob.arrayBuffer());
+    while (offset < totalSize) {
+      if (signal?.aborted) {
+        throw new DOMException("Upload aborted", "AbortError");
+      }
 
-    const chunkRes = await uploadAgentFileChunk(
+      const blob = file.slice(offset, offset + chunkSize);
+      const end = offset + blob.size - 1;
+      hashBytes(hasher, await blob.arrayBuffer());
+
+      const chunkRes = await uploadAgentFileChunk(
+        agentId,
+        sessionId,
+        blob,
+        `bytes ${offset}-${end}/${totalSize}`,
+        signal,
+      );
+
+      offset = chunkRes.accepted_offset;
+      onProgress?.({
+        acceptedOffset: chunkRes.accepted_offset,
+        committedOffset: chunkRes.committed_offset,
+        totalSize,
+      });
+    }
+
+    const fileSha256 = hasher.hex();
+    const completeData = await completeAgentFileUpload(
       agentId,
       sessionId,
-      blob,
-      `bytes ${offset}-${end}/${totalSize}`,
+      fileSha256,
       signal,
     );
 
-    offset = chunkRes.accepted_offset;
-    onProgress?.({
-      acceptedOffset: chunkRes.accepted_offset,
-      committedOffset: chunkRes.committed_offset,
-      totalSize,
-    });
+    const agentSha = (completeData.sha256 || "").toLowerCase();
+    const integrityOk = !agentSha || agentSha === fileSha256;
+
+    clearUploadResume(agentId, file, destinationPath);
+
+    return {
+      destinationPath: completeData.destination_path,
+      sha256: fileSha256,
+      integrityOk,
+    };
+  } catch (err) {
+    if (!isAbortError(err)) {
+      await releaseUploadSession(agentId, sessionId);
+      clearUploadResume(agentId, file, destinationPath);
+    }
+    throw err;
   }
-
-  const fileSha256 = hasher.hex();
-  const completeData = await completeAgentFileUpload(
-    agentId,
-    sessionId,
-    fileSha256,
-    signal,
-  );
-
-  const agentSha = (completeData.sha256 || "").toLowerCase();
-  const integrityOk = !agentSha || agentSha === fileSha256;
-
-  clearUploadResume(agentId, file, destinationPath);
-
-  return {
-    destinationPath: completeData.destination_path,
-    sha256: fileSha256,
-    integrityOk,
-  };
 }
 
 export { isAbortError };

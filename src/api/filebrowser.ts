@@ -227,3 +227,14 @@ export async function cancelAgentFileDownload(
     { timeout: 30_000 },
   );
 }
+
+export async function cancelAgentFileUpload(
+  agentId: string,
+  sessionId: string,
+): Promise<void> {
+  await axios.post(
+    `${baseUrl}/${agentId}/files/upload/${sessionId}/cancel/`,
+    {},
+    { timeout: 30_000 },
+  );
+}
