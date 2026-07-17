@@ -31,6 +31,10 @@ export interface FileTransferInitDownloadResponse {
   chunk_size: number;
   committed_offset: number;
   resumed?: boolean;
+  filename?: string;
+  is_archive?: boolean;
+  warnings?: string[];
+  preparing?: boolean;
 }
 
 export interface FileTransferCompleteDownloadResponse {
@@ -39,6 +43,18 @@ export interface FileTransferCompleteDownloadResponse {
   source_path: string;
   committed_offset: number;
   sha256?: string;
+}
+
+export interface FileTransferDownloadStatusResponse {
+  session_id: string;
+  status: string;
+  total_size: number;
+  chunk_size: number;
+  committed_offset: number;
+  filename: string;
+  is_archive: boolean;
+  warnings: string[];
+  error: string;
 }
 
 export interface FileTransferProgress {
@@ -59,6 +75,7 @@ export interface FileTransferDownloadResult {
   sha256: string;
   integrityOk: boolean;
   bytesWritten: number;
+  warnings?: string[];
 }
 
 export type DownloadTransferStatus =

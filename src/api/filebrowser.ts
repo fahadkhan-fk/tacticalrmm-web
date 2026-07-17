@@ -7,6 +7,7 @@ import {
 import type {
   FileTransferCompleteDownloadResponse,
   FileTransferCompleteUploadResponse,
+  FileTransferDownloadStatusResponse,
   FileTransferInitDownloadResponse,
   FileTransferInitUploadResponse,
   FileTransferUploadChunkResponse,
@@ -92,9 +93,39 @@ export interface InitFileDownloadPayload {
   chunk_size?: number;
 }
 
+export interface InitArchiveDownloadPayload {
+  paths: string[];
+  filename?: string;
+  chunk_size?: number;
+}
+
 export interface ResumeFileDownloadPayload {
   session_id: string;
   resume_offset: number;
+}
+
+export async function initAgentArchiveDownload(
+  agentId: string,
+  payload: InitArchiveDownloadPayload,
+): Promise<FileTransferInitDownloadResponse> {
+  const { data } = await axios.post<FileTransferInitDownloadResponse>(
+    `${baseUrl}/${agentId}/files/download/archive/init/`,
+    payload,
+    { timeout: 60_000 },
+  );
+  return data;
+}
+
+export async function getAgentDownloadStatus(
+  agentId: string,
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<FileTransferDownloadStatusResponse> {
+  const { data } = await axios.get<FileTransferDownloadStatusResponse>(
+    `${baseUrl}/${agentId}/files/download/${sessionId}/status/`,
+    { timeout: 30_000, signal },
+  );
+  return data;
 }
 
 export async function initAgentFileDownload(
@@ -184,4 +215,15 @@ export async function completeAgentFileDownload(
     { timeout: 60_000, signal },
   );
   return data;
+}
+
+export async function cancelAgentFileDownload(
+  agentId: string,
+  sessionId: string,
+): Promise<void> {
+  await axios.post(
+    `${baseUrl}/${agentId}/files/download/${sessionId}/cancel/`,
+    {},
+    { timeout: 30_000 },
+  );
 }

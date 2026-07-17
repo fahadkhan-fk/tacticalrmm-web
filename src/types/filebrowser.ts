@@ -121,6 +121,8 @@ export interface DownloadQueueItem {
   id: string;
   name: string;
   sourcePath: string;
+  kind?: "file" | "archive";
+  archivePaths?: string[];
   status: DownloadQueueStatus;
   progress: number;
   errorMessage?: string;
