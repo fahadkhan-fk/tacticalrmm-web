@@ -217,13 +217,16 @@ export async function completeAgentFileDownload(
   return data;
 }
 
+export type FileTransferCancelReason = "user" | "error";
+
 export async function cancelAgentFileDownload(
   agentId: string,
   sessionId: string,
+  reason: FileTransferCancelReason = "user",
 ): Promise<void> {
   await axios.post(
     `${baseUrl}/${agentId}/files/download/${sessionId}/cancel/`,
-    {},
+    { reason },
     { timeout: 30_000 },
   );
 }
@@ -231,10 +234,11 @@ export async function cancelAgentFileDownload(
 export async function cancelAgentFileUpload(
   agentId: string,
   sessionId: string,
+  reason: FileTransferCancelReason = "user",
 ): Promise<void> {
   await axios.post(
     `${baseUrl}/${agentId}/files/upload/${sessionId}/cancel/`,
-    {},
+    { reason },
     { timeout: 30_000 },
   );
 }

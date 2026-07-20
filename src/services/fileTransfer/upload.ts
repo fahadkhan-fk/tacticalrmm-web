@@ -31,7 +31,7 @@ async function releaseUploadSession(
 ): Promise<void> {
   if (!sessionId) return;
   try {
-    await cancelAgentFileUpload(agentId, sessionId);
+    await cancelAgentFileUpload(agentId, sessionId, "error");
   } catch {
     // frees the server session slot for retry
   }

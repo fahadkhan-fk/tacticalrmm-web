@@ -66,7 +66,7 @@ async function releaseDownloadSession(
 ): Promise<void> {
   if (!sessionId) return;
   try {
-    await cancelAgentFileDownload(agentId, sessionId);
+    await cancelAgentFileDownload(agentId, sessionId, "error");
   } catch {
     // frees agent session slot for retry
   }
