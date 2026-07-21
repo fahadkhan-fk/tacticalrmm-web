@@ -43,6 +43,13 @@ export default function ({ app, router }) {
       return response;
     },
     async function (error) {
+      if (error.config?.skipGlobalErrorNotify) {
+        if (error.response?.status === 401) {
+          router.push({ path: "/expired" });
+        }
+        return Promise.reject(error);
+      }
+
       if (error.code && error.code === "ERR_NETWORK") {
         Notify.create({
           color: "negative",

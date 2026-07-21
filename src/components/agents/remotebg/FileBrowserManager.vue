@@ -181,6 +181,7 @@ import {
   classifyDownloadSelection,
   deriveArchiveDownloadName,
   getFileBrowserErrorMessage,
+  isDuplicateNameError,
   getListFilesErrorMessage,
   isFileDrag,
   isListFilesAgentOfflineError,
@@ -442,7 +443,11 @@ async function confirmNewFolder(name: string) {
     notifySuccess("Folder created");
     await refresh();
   } catch (err: unknown) {
-    notifyError(getFileBrowserErrorMessage(err, "Unable to create folder."));
+    const message = getFileBrowserErrorMessage(err, "Unable to create folder.");
+    notifyError(message);
+    if (isDuplicateNameError(err, message)) {
+      void refresh();
+    }
   } finally {
     mutationSaving.value = false;
   }
@@ -477,7 +482,11 @@ async function confirmRename(newName: string) {
     notifySuccess("Renamed");
     await refresh();
   } catch (err: unknown) {
-    notifyError(getFileBrowserErrorMessage(err, "Unable to rename item."));
+    const message = getFileBrowserErrorMessage(err, "Unable to rename item.");
+    notifyError(message);
+    if (isDuplicateNameError(err, message)) {
+      void refresh();
+    }
   } finally {
     mutationSaving.value = false;
   }

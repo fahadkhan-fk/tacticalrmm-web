@@ -173,10 +173,6 @@ export function mapApiItemsToFileBrowserItems(
 }
 
 export function getListFilesErrorMessage(err: unknown): string {
-  if (err instanceof Error && err.message.trim()) {
-    return formatFileBrowserApiErrorMessage(err.message);
-  }
-
   if (err instanceof AxiosError) {
     if (err.code === "ERR_NETWORK") {
       return "Unable to reach the server. Check your connection.";
@@ -207,21 +203,82 @@ export function getListFilesErrorMessage(err: unknown): string {
         }
       }
     }
+    if (err.response?.statusText) {
+      if (
+        err.message &&
+        !/^Request failed with status code \d+$/i.test(err.message)
+      ) {
+        return formatFileBrowserApiErrorMessage(err.message);
+      }
+    }
+  } else if (err instanceof Error && err.message.trim()) {
+    return formatFileBrowserApiErrorMessage(err.message);
   }
   return "Unable to load directory contents.";
 }
 
 export function formatFileBrowserApiErrorMessage(raw: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed) return trimmed;
+  const afterFailed = unwrapApiErrorText(raw);
+  if (!afterFailed) return afterFailed;
 
-  const filesFailed = /^Files \w+ failed:\s*(.+)$/i.exec(trimmed);
+  if (
+    /this destination already contains a (file|folder) named/i.test(afterFailed)
+  ) {
+    return ensureSentence(afterFailed);
+  }
+  if (/^a (file|folder) named .+ already exists\.?$/i.test(afterFailed)) {
+    return ensureSentence(afterFailed);
+  }
+
+  const namedDup =
+    /^a file or folder named ["“]?(.+?)["”]? already exists\.?$/i.exec(
+      afterFailed,
+    );
+  if (namedDup?.[1]) {
+    return `A file or folder named "${namedDup[1]}" already exists.`;
+  }
+  if (/already exists/i.test(afterFailed)) {
+    return "A file or folder with this name already exists.";
+  }
+
+  return ensureSentence(afterFailed);
+}
+
+function unwrapApiErrorText(raw: string): string {
+  let text = raw.trim();
+  if (!text) return text;
+
+  if (text.startsWith('"') && text.endsWith('"')) {
+    try {
+      const parsed = JSON.parse(text);
+      if (typeof parsed === "string") {
+        text = parsed.trim();
+      }
+    } catch {
+      // Keep as it is, trailing "may be part of a name like ...named"
+    }
+  }
+
+  const filesFailed = /^Files \w+ failed:\s*(.+)$/i.exec(text);
   if (filesFailed?.[1]) return filesFailed[1].trim();
 
-  const genericFailed = /failed:\s*(.+)$/i.exec(trimmed);
+  const genericFailed = /^[^:]+\s+failed:\s*(.+)$/i.exec(text);
   if (genericFailed?.[1]) return genericFailed[1].trim();
 
-  return trimmed;
+  return text;
+}
+
+function ensureSentence(message: string): string {
+  const trimmed = message.trim();
+  if (!trimmed) return trimmed;
+  const capped = trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+  return /[.!?]$/.test(capped) ? capped : `${capped}.`;
+}
+
+export function isDuplicateNameError(err: unknown, message?: string): boolean {
+  const text =
+    (message && message.trim()) || getFileBrowserErrorMessage(err, "");
+  return /already exists|already contains/i.test(text);
 }
 
 export function getFileBrowserErrorMessage(
