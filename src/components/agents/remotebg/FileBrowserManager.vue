@@ -529,25 +529,50 @@ function pendingItemName(
   return match?.name ?? resultPath.split(/[/\\]/).pop() ?? resultPath;
 }
 
+function isDeleteAlreadyGone(error?: string): boolean {
+  return /path not found/i.test((error ?? "").trim());
+}
+
 function notifyDeleteResults(
   pending: FileBrowserItem[],
   results: FileBrowserDeleteResult[],
 ) {
   const succeeded = results.filter((result) => result.success);
-  const failed = results.filter((result) => !result.success);
+  const alreadyGone = results.filter(
+    (result) => !result.success && isDeleteAlreadyGone(result.error),
+  );
+  const failed = results.filter(
+    (result) => !result.success && !isDeleteAlreadyGone(result.error),
+  );
 
   if (failed.length === 0) {
-    if (succeeded.length === 1) {
+    if (succeeded.length === 1 && alreadyGone.length === 0) {
       notifySuccess(
         `Deleted "${pendingItemName(pending, succeeded[0].path)}".`,
       );
-      return;
+    } else if (succeeded.length > 1 && alreadyGone.length === 0) {
+      notifySuccess(`Deleted ${succeeded.length} items.`);
+    } else if (succeeded.length > 0 && alreadyGone.length > 0) {
+      notifySuccess(
+        succeeded.length === 1
+          ? `Deleted "${pendingItemName(pending, succeeded[0].path)}".`
+          : `Deleted ${succeeded.length} items.`,
+      );
     }
-    notifySuccess(`Deleted ${succeeded.length} items.`);
+
+    if (alreadyGone.length === 1) {
+      notifyInfo(
+        `"${pendingItemName(pending, alreadyGone[0].path)}" was already gone on the agent. The list has been updated.`,
+      );
+    } else if (alreadyGone.length > 1) {
+      notifyInfo(
+        `${alreadyGone.length} items were already gone on the agent. The list has been updated.`,
+      );
+    }
     return;
   }
 
-  if (succeeded.length === 0) {
+  if (succeeded.length === 0 && alreadyGone.length === 0) {
     const detail = failed
       .map((result) => {
         const name = pendingItemName(pending, result.path);
@@ -558,8 +583,9 @@ function notifyDeleteResults(
     return;
   }
 
+  const removed = succeeded.length + alreadyGone.length;
   notifyWarning(
-    `Deleted ${succeeded.length} of ${results.length} items. ${failed.length} failed.`,
+    `Removed ${removed} of ${results.length} items. ${failed.length} failed.`,
   );
 }
 
