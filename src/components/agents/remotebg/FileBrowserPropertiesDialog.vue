@@ -6,9 +6,6 @@
     <q-card style="min-width: 440px; max-width: 520px">
       <q-card-section>
         <div class="text-h6">{{ dialogTitle }}</div>
-        <div v-if="item?.name" class="text-caption text-grey-7 q-mt-xs">
-          {{ item.name }}
-        </div>
       </q-card-section>
 
       <q-separator />
@@ -131,8 +128,8 @@ const emit = defineEmits<{
 }>();
 
 const dialogTitle = computed(() => {
-  if (props.item?.type === "folder") return "Folder Properties";
-  if (props.item?.type === "file") return "File Properties";
+  const name = props.item?.name?.trim();
+  if (name) return `${name} Properties`;
   return "Properties";
 });
 
