@@ -116,6 +116,9 @@ export function mapApiItemToFileBrowserItem(
   platform?: string,
 ): FileBrowserItem {
   const normalizedPath = normalizeAgentListPath(raw.path, platform);
+  const bytes = parseInt(raw.size, 10);
+  const hasBytes = Number.isFinite(bytes) && bytes >= 0;
+
   const item: FileBrowserItem = {
     id: normalizeAgentListPath(raw.id || raw.path, platform),
     name: raw.name,
@@ -133,9 +136,30 @@ export function mapApiItemToFileBrowserItem(
     item.extension = raw.extension;
   }
 
+  if (raw.location) {
+    item.location = normalizeAgentListPath(raw.location, platform);
+  }
+
   if (raw.type === "file") {
-    const bytes = parseInt(raw.size, 10);
-    item.size = Number.isFinite(bytes) && bytes >= 0 ? bytes2Human(bytes) : "—";
+    if (hasBytes) {
+      item.sizeBytes = bytes;
+      item.size = bytes2Human(bytes);
+    } else {
+      item.size = "—";
+    }
+  } else if (raw.type === "folder" && hasBytes) {
+    item.sizeBytes = bytes;
+    item.size = bytes2Human(bytes);
+  }
+
+  if (typeof raw.file_count === "number") {
+    item.fileCount = raw.file_count;
+  }
+  if (typeof raw.folder_count === "number") {
+    item.folderCount = raw.folder_count;
+  }
+  if (raw.summary_truncated != null) {
+    item.summaryTruncated = Boolean(raw.summary_truncated);
   }
 
   return item;

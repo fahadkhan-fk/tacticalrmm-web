@@ -34,12 +34,17 @@ export interface FileBrowserItem {
   type: FileBrowserItemType;
   extension?: string;
   size?: string;
+  sizeBytes?: number;
   modified?: string;
   created?: string;
   accessed?: string;
   hidden?: boolean;
   system?: boolean;
   readonly?: boolean;
+  location?: string;
+  fileCount?: number;
+  folderCount?: number;
+  summaryTruncated?: boolean;
 }
 
 export interface FileBrowserApiItem {
@@ -55,6 +60,10 @@ export interface FileBrowserApiItem {
   hidden?: boolean;
   system?: boolean;
   readonly?: boolean;
+  location?: string;
+  file_count?: number;
+  folder_count?: number;
+  summary_truncated?: boolean;
 }
 
 export interface FileBrowserDirectoryResponse {
