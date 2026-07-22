@@ -942,10 +942,9 @@ async function runSingleDownload(itemId: string): Promise<void> {
 
     if (isDownloadAbortError(err)) {
       current.status = "cancelled";
+      current.errorMessage = undefined;
       if (downloadBatchIsSingle.value && downloadQueue.value.length === 1) {
-        notifyInfo(
-          "Download stopped. Click Download again on the same file to resume.",
-        );
+        notifyInfo("Download cancelled.");
       }
       return;
     }
@@ -1423,9 +1422,8 @@ async function runSingleUpload(itemId: string): Promise<void> {
 
     if (isUploadAbortError(err)) {
       current.status = "cancelled";
-      notifyInfo(
-        `"${item.name}" stopped. Add the same file again to resume the upload.`,
-      );
+      current.errorMessage = undefined;
+      notifyInfo("Upload cancelled.");
       return;
     }
 

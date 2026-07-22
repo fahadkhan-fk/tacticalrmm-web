@@ -1,3 +1,5 @@
+import axios from "axios";
+
 import {
   FILE_TRANSFER_DOWNLOAD_IDB_NAME,
   FILE_TRANSFER_DOWNLOAD_IDB_STORE,
@@ -198,15 +200,23 @@ export function alignResumeOffset(
 
 export function isAbortError(err: unknown): boolean {
   if (err instanceof DOMException && err.name === "AbortError") return true;
-  if (axiosLikeAbort(err)) return true;
-  return false;
-}
+  if (typeof err !== "object" || err === null) return false;
 
-function axiosLikeAbort(err: unknown): boolean {
-  return (
-    typeof err === "object" &&
-    err !== null &&
-    "code" in err &&
-    (err as { code?: string }).code === "ERR_CANCELED"
-  );
+  const e = err as {
+    code?: string;
+    name?: string;
+    message?: string;
+  };
+
+  if (e.code === "ERR_CANCELED") return true;
+  if (e.name === "CanceledError" || e.name === "AbortError") return true;
+  if (typeof axios.isCancel === "function" && axios.isCancel(err)) return true;
+  if (
+    /^(canceled|cancelled|download aborted|upload aborted)$/i.test(
+      (e.message ?? "").trim(),
+    )
+  ) {
+    return true;
+  }
+  return false;
 }

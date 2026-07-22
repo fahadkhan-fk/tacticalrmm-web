@@ -19,6 +19,18 @@ export function setErrorMessage(data, message) {
   ];
 }
 
+function isRequestCanceled(error) {
+  if (!error) return false;
+  if (typeof axios.isCancel === "function" && axios.isCancel(error)) {
+    return true;
+  }
+  return (
+    error.code === "ERR_CANCELED" ||
+    error.name === "CanceledError" ||
+    error.name === "AbortError"
+  );
+}
+
 export default function ({ app, router }) {
   app.config.globalProperties.$axios = axios;
   axios.defaults.withCredentials = true;
@@ -43,8 +55,14 @@ export default function ({ app, router }) {
       return response;
     },
     async function (error) {
+      if (isRequestCanceled(error)) {
+        return Promise.reject(error);
+      }
+
+      const status = error.response?.status;
+
       if (error.config?.skipGlobalErrorNotify) {
-        if (error.response?.status === 401) {
+        if (status === 401) {
           router.push({ path: "/expired" });
         }
         return Promise.reject(error);
@@ -58,35 +76,25 @@ export default function ({ app, router }) {
             "Open your browser's dev tools and check the console tab for more detailed error messages",
           timeout: 5000,
         });
-        return Promise.reject({ ...error });
+        return Promise.reject(error);
       }
 
       let text;
 
       if (!error.response) {
         text = error.message;
-      }
-      // unauthorized
-      else if (error.response.status === 401) {
+      } else if (status === 401) {
         router.push({ path: "/expired" });
-      }
-      // perms
-      else if (error.response.status === 403) {
+      } else if (status === 403) {
         // don't notify user if method is GET
         if (
           error.config.method === "get" ||
           error.config.method === "patch" ||
           error.config.url === "accounts/ssoproviders/token/"
         )
-          return Promise.reject({ ...error });
+          return Promise.reject(error);
         text = error.response.data.detail;
-      }
-      // catch all for other 400 error messages
-      else if (
-        error.response.status >= 400 &&
-        error.response.status < 500 &&
-        error.response.status !== 423
-      ) {
+      } else if (status >= 400 && status < 500 && status !== 423) {
         if (error.config.responseType === "blob") {
           text = (await error.response.data.text()).replace(/^"|"$/g, "");
         } else if (error.response.data.non_field_errors) {
@@ -101,18 +109,18 @@ export default function ({ app, router }) {
         }
       }
 
-      if ((text || error.response) && error.response.status !== 423) {
+      if ((text || error.response) && status !== 423) {
         Notify.create({
           color: "negative",
           message: text ? text : "",
           caption: error.response
-            ? error.response.status + ": " + error.response.statusText
+            ? `${status}: ${error.response.statusText}`
             : "",
           timeout: 2500,
         });
       }
 
-      return Promise.reject({ ...error });
+      return Promise.reject(error);
     },
   );
 }

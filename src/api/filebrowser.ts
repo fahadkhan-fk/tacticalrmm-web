@@ -15,6 +15,10 @@ import type {
 
 const baseUrl = "/agents";
 
+const transferRequestConfig = {
+  skipGlobalErrorNotify: true,
+} as const;
+
 export interface InitFileUploadPayload {
   filename: string;
   destination_path: string;
@@ -35,7 +39,7 @@ export async function initAgentFileUpload(
   const { data } = await axios.post<FileTransferInitUploadResponse>(
     `${baseUrl}/${agentId}/files/upload/init/`,
     payload,
-    { timeout: 60_000 },
+    { timeout: 60_000, ...transferRequestConfig },
   );
   return data;
 }
@@ -47,7 +51,7 @@ export async function resumeAgentFileUpload(
   const { data } = await axios.post<FileTransferInitUploadResponse>(
     `${baseUrl}/${agentId}/files/upload/init/`,
     payload,
-    { timeout: 60_000 },
+    { timeout: 60_000, ...transferRequestConfig },
   );
   return data;
 }
@@ -69,6 +73,7 @@ export async function uploadAgentFileChunk(
       },
       timeout: FILE_TRANSFER_UPLOAD_CHUNK_TIMEOUT_MS,
       signal,
+      ...transferRequestConfig,
     },
   );
   return data;
@@ -83,7 +88,7 @@ export async function completeAgentFileUpload(
   const { data } = await axios.post<FileTransferCompleteUploadResponse>(
     `${baseUrl}/${agentId}/files/upload/${sessionId}/complete/`,
     { sha256 },
-    { timeout: 60_000, signal },
+    { timeout: 60_000, signal, ...transferRequestConfig },
   );
   return data;
 }
@@ -111,7 +116,7 @@ export async function initAgentArchiveDownload(
   const { data } = await axios.post<FileTransferInitDownloadResponse>(
     `${baseUrl}/${agentId}/files/download/archive/init/`,
     payload,
-    { timeout: 60_000 },
+    { timeout: 60_000, ...transferRequestConfig },
   );
   return data;
 }
@@ -123,7 +128,7 @@ export async function getAgentDownloadStatus(
 ): Promise<FileTransferDownloadStatusResponse> {
   const { data } = await axios.get<FileTransferDownloadStatusResponse>(
     `${baseUrl}/${agentId}/files/download/${sessionId}/status/`,
-    { timeout: 30_000, signal },
+    { timeout: 30_000, signal, ...transferRequestConfig },
   );
   return data;
 }
@@ -135,7 +140,7 @@ export async function initAgentFileDownload(
   const { data } = await axios.post<FileTransferInitDownloadResponse>(
     `${baseUrl}/${agentId}/files/download/init/`,
     payload,
-    { timeout: 60_000 },
+    { timeout: 60_000, ...transferRequestConfig },
   );
   return data;
 }
@@ -147,7 +152,7 @@ export async function resumeAgentFileDownload(
   const { data } = await axios.post<FileTransferInitDownloadResponse>(
     `${baseUrl}/${agentId}/files/download/init/`,
     payload,
-    { timeout: 60_000 },
+    { timeout: 60_000, ...transferRequestConfig },
   );
   return data;
 }
@@ -182,6 +187,7 @@ export async function getAgentFileDownloadChunk(
       responseType: "arraybuffer",
       timeout: FILE_TRANSFER_DOWNLOAD_CHUNK_TIMEOUT_MS,
       signal,
+      ...transferRequestConfig,
     },
   );
   const contentRange =
@@ -199,7 +205,7 @@ export async function ackAgentFileDownloadChunk(
   const { data } = await axios.post<{ committed_offset: number }>(
     `${baseUrl}/${agentId}/files/download/${sessionId}/ack/`,
     { committed_offset: committedOffset },
-    { timeout: 30_000 },
+    { timeout: 30_000, ...transferRequestConfig },
   );
   return data;
 }
@@ -212,7 +218,7 @@ export async function completeAgentFileDownload(
   const { data } = await axios.post<FileTransferCompleteDownloadResponse>(
     `${baseUrl}/${agentId}/files/download/${sessionId}/complete/`,
     {},
-    { timeout: 60_000, signal },
+    { timeout: 60_000, signal, ...transferRequestConfig },
   );
   return data;
 }
@@ -227,7 +233,7 @@ export async function cancelAgentFileDownload(
   await axios.post(
     `${baseUrl}/${agentId}/files/download/${sessionId}/cancel/`,
     { reason },
-    { timeout: 30_000 },
+    { timeout: 30_000, ...transferRequestConfig },
   );
 }
 
@@ -239,6 +245,6 @@ export async function cancelAgentFileUpload(
   await axios.post(
     `${baseUrl}/${agentId}/files/upload/${sessionId}/cancel/`,
     { reason },
-    { timeout: 30_000 },
+    { timeout: 30_000, ...transferRequestConfig },
   );
 }
