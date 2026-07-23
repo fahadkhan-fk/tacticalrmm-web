@@ -22,13 +22,10 @@ import {
 
 export interface RunFileUploadOptions {
   signal?: AbortSignal;
-  /** Shared intent object — mutate `.mode` before abort() ("pause" | "cancel"). */
   abortIntent?: TransferAbortIntent;
   chunkSize?: number;
   onProgress?: (progress: FileTransferProgress) => void;
-  /** Called once the server session id is known (init or resume). */
   onSession?: (sessionId: string) => void;
-  /** Session id already known to the UI (e.g. paused queue item). */
   knownSessionId?: string;
 }
 

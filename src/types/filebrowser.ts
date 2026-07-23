@@ -116,9 +116,7 @@ export interface UploadQueueItem {
   acceptedOffset?: number;
   committedOffset?: number;
   errorMessage?: string;
-  /** Server transfer session — kept across Pause for Cancel/Resume. */
   sessionId?: string;
-  /** Visibility only — paused transfers can be hidden without discarding. */
   hidden?: boolean;
 }
 
@@ -141,9 +139,7 @@ export interface DownloadQueueItem {
   status: DownloadQueueStatus;
   progress: number;
   errorMessage?: string;
-  /** Server transfer session — kept across Pause for Cancel/Resume. */
   sessionId?: string;
-  /** Visibility only — paused transfers can be hidden without discarding. */
   hidden?: boolean;
 }
 

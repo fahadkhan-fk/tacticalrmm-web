@@ -122,7 +122,6 @@ import RegistryManager from "@/components/agents/remotebg/RegistryManager.vue";
 import registryIcon from "../assets/windows-registry.png";
 import TerminalManager from "@/components/agents/remotebg/TerminalManager.vue";
 
-// Lazy-load so a File Browser module error cannot blank the whole Remote BG page.
 const FileBrowserManager = defineAsyncComponent(
   () => import("@/components/agents/remotebg/FileBrowserManager.vue"),
 );

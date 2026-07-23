@@ -1115,8 +1115,6 @@ async function processDownloadQueue(): Promise<void> {
       const current = findDownloadItem(next.id);
       if (!current) continue;
 
-      // Individual pause/cancel should not halt the rest of the batch.
-      // Only "Pause all" (downloadStopAllRequested) ends remaining work.
       if (downloadStopAllRequested) {
         cancelRemainingDownloads();
         break;
@@ -1206,9 +1204,7 @@ async function discardPausedDownload(item: DownloadQueueItem): Promise<void> {
   if (sessionId) {
     try {
       await cancelAgentFileDownload(props.agent_id, sessionId, "user");
-    } catch {
-      // best-effort slot release
-    }
+    } catch {}
   }
   item.sessionId = undefined;
   clearDownloadResume(props.agent_id, resumeScopeKey);
@@ -1712,9 +1708,7 @@ async function discardPausedUpload(item: UploadQueueItem): Promise<void> {
   if (sessionId) {
     try {
       await cancelAgentFileUpload(props.agent_id, sessionId, "user");
-    } catch {
-      // best-effort slot release
-    }
+    } catch {}
   }
   item.sessionId = undefined;
   clearUploadResume(props.agent_id, item.file, item.destinationPath);

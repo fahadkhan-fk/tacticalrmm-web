@@ -520,7 +520,6 @@ export function canHideDownloadQueueItem(status: DownloadQueueStatus): boolean {
   return status === "paused";
 }
 
-/** @deprecated Prefer canDismissDownloadQueueItem / canHideDownloadQueueItem. */
 export function canRemoveDownloadQueueItem(
   status: DownloadQueueStatus,
 ): boolean {

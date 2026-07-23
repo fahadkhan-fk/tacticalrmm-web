@@ -88,7 +88,6 @@ export type DownloadTransferStatus =
   | "paused"
   | "cancelled";
 
-/** Pause = keep resume state; cancel = discard session + temp/resume artifacts. */
 export type TransferAbortMode = "pause" | "cancel";
 
 export interface TransferAbortIntent {

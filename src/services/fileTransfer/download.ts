@@ -40,17 +40,11 @@ import {
 
 export interface RunFileDownloadOptions {
   signal?: AbortSignal;
-  /** Shared intent object — mutate `.mode` before abort() ("pause" | "cancel"). */
   abortIntent?: TransferAbortIntent;
   chunkSize?: number;
   onProgress?: (progress: FileTransferProgress) => void;
   onStatus?: (status: "initializing" | "downloading" | "completing") => void;
-  /** Called once the server session id is known (init or resume). */
   onSession?: (sessionId: string) => void;
-  /**
-   * Session id already known to the UI (e.g. paused queue item). Used to
-   * release the server slot if resume cannot continue that session.
-   */
   knownSessionId?: string;
   onArchiveBuilding?: () => void;
 }
@@ -165,7 +159,6 @@ async function createDownloadSink(
   sink: DownloadSink;
   resumeOffset: number;
   resumeSessionId: string | null;
-  /** Prior session left behind when the partial file could not be reopened. */
   abandonedSessionId: string | null;
   usesMemoryBuffer: boolean;
 }> {
@@ -206,7 +199,6 @@ async function createDownloadSink(
     resumeOffset = 0;
     resumeSessionId = null;
     clearDownloadResume(agentId, resumeScopeKey);
-    // Free the old slot before any new init (archive beforeSavePicker).
     if (abandonedSessionId) {
       await releaseDownloadSession(agentId, abandonedSessionId, "user");
       abandonedSessionId = null;
