@@ -17,6 +17,20 @@
           :disable="!canClearFinished"
           @click="emit('clear-finished')"
         />
+        <q-btn
+          dense
+          flat
+          no-caps
+          size="sm"
+          label="Hide all"
+          :disable="!canHideAll"
+          @click="emit('hide-all')"
+        >
+          <q-tooltip
+            >Hide paused transfers from this panel. Use Transfers to show them
+            again.</q-tooltip
+          >
+        </q-btn>
       </div>
     </div>
     <div class="text-caption upload-queue-destination q-mb-sm">
@@ -168,6 +182,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: "clear-finished"): void;
+  (e: "hide-all"): void;
   (e: "dismiss", id: string): void;
   (e: "pause", id: string): void;
   (e: "resume", id: string): void;
@@ -177,6 +192,10 @@ const emit = defineEmits<{
 
 const canClearFinished = computed(() =>
   props.items.some((item) => isUploadQueueItemTerminal(item.status)),
+);
+
+const canHideAll = computed(() =>
+  props.items.some((item) => item.status === "paused"),
 );
 
 function progressColor(status: UploadQueueStatus): string {

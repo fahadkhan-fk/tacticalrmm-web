@@ -50,6 +50,7 @@
       :destination-label="uploadDestinationLabel"
       :limits-caption="uploadLimitsCaption"
       @clear-finished="clearFinishedUploads"
+      @hide-all="hideAllUploadItems"
       @dismiss="dismissUploadItem"
       @pause="pauseUploadItem"
       @resume="resumeUploadItem"
@@ -79,6 +80,7 @@
       :items="visibleDownloadQueueItems"
       :summary-caption="downloadQueueSummary ?? undefined"
       @clear-finished="clearFinishedDownloads"
+      @hide-all="hideAllDownloadItems"
       @pause-all="pauseAllDownloads"
       @dismiss="dismissDownloadItem"
       @pause="pauseDownloadItem"
@@ -1229,6 +1231,14 @@ function hideDownloadItem(id: string) {
   item.hidden = true;
 }
 
+function hideAllDownloadItems() {
+  for (const item of downloadQueue.value) {
+    if (item.status === "paused") {
+      item.hidden = true;
+    }
+  }
+}
+
 function dismissDownloadItem(id: string) {
   const item = findDownloadItem(id);
   if (!item) return;
@@ -1724,6 +1734,14 @@ function hideUploadItem(id: string) {
   const item = findUploadItem(id);
   if (!item || item.status !== "paused") return;
   item.hidden = true;
+}
+
+function hideAllUploadItems() {
+  for (const item of uploadQueue.value) {
+    if (item.status === "paused") {
+      item.hidden = true;
+    }
+  }
 }
 
 function dismissUploadItem(id: string) {

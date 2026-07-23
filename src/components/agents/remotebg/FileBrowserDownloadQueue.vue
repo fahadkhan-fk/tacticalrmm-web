@@ -22,6 +22,20 @@
           flat
           no-caps
           size="sm"
+          label="Hide all"
+          :disable="!canHideAll"
+          @click="emit('hide-all')"
+        >
+          <q-tooltip
+            >Hide paused transfers from this panel. Use Transfers to show them
+            again.</q-tooltip
+          >
+        </q-btn>
+        <q-btn
+          dense
+          flat
+          no-caps
+          size="sm"
           color="negative"
           label="Pause all"
           :disable="!canPauseAll"
@@ -187,6 +201,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: "clear-finished"): void;
+  (e: "hide-all"): void;
   (e: "pause-all"): void;
   (e: "dismiss", id: string): void;
   (e: "pause", id: string): void;
@@ -197,6 +212,10 @@ const emit = defineEmits<{
 
 const canClearFinished = computed(() =>
   props.items.some((item) => canDismissDownloadQueueItem(item.status)),
+);
+
+const canHideAll = computed(() =>
+  props.items.some((item) => item.status === "paused"),
 );
 
 const canPauseAll = computed(() =>
