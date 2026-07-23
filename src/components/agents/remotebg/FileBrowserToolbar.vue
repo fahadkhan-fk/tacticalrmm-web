@@ -91,6 +91,30 @@
     </div>
 
     <div class="row items-center q-gutter-sm">
+      <q-btn
+        v-if="showTransfers"
+        dense
+        unelevated
+        no-caps
+        icon="swap_vert"
+        :label="transfersLabel"
+        class="toolbar-btn"
+        @click="emit('open-transfers')"
+      >
+        <q-badge
+          v-if="pausedCount > 0"
+          color="warning"
+          text-color="dark"
+          floating
+        >
+          {{ pausedCount }}
+        </q-badge>
+        <q-tooltip v-if="pausedCount > 0">
+          {{ pausedTooltip }} — paused transfers still use a session slot until
+          Cancel or expiry
+        </q-tooltip>
+      </q-btn>
+
       <q-input
         :model-value="search"
         dense
@@ -119,14 +143,18 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from "vue";
 import { useQuasar } from "quasar";
 
 const $q = useQuasar();
 
-defineProps<{
+const props = defineProps<{
   hasUploadPath: boolean;
   selectedCount: number;
   search: string;
+  showTransfers?: boolean;
+  transfersLabel?: string;
+  pausedCount?: number;
 }>();
 
 const emit = defineEmits<{
@@ -138,8 +166,15 @@ const emit = defineEmits<{
   (e: "properties"): void;
   (e: "copy-path"): void;
   (e: "refresh"): void;
+  (e: "open-transfers"): void;
   (e: "update:search", value: string): void;
 }>();
+
+const pausedTooltip = computed(() =>
+  (props.pausedCount ?? 0) === 1
+    ? "1 paused"
+    : `${props.pausedCount ?? 0} paused`,
+);
 
 function onSearchUpdate(val: string | number | null) {
   emit("update:search", String(val ?? ""));

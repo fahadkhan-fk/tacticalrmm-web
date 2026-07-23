@@ -23,9 +23,9 @@
           no-caps
           size="sm"
           color="negative"
-          label="Stop all"
-          :disable="!canStopAll"
-          @click="emit('stop-all')"
+          label="Pause all"
+          :disable="!canPauseAll"
+          @click="emit('pause-all')"
         />
       </div>
     </div>
@@ -80,27 +80,83 @@
           >
             {{ downloadStatusLabel(item.status) }}
           </q-badge>
+          <div
+            v-if="isDownloadQueueItemActive(item.status)"
+            class="row q-gutter-xs q-mt-xs"
+          >
+            <q-btn
+              dense
+              flat
+              no-caps
+              size="sm"
+              label="Pause"
+              @click="emit('pause', item.id)"
+            />
+            <q-btn
+              dense
+              flat
+              no-caps
+              size="sm"
+              color="negative"
+              label="Cancel"
+              @click="emit('cancel', item.id)"
+            />
+          </div>
+          <div
+            v-else-if="item.status === 'paused'"
+            class="row q-gutter-xs q-mt-xs"
+          >
+            <q-btn
+              dense
+              flat
+              no-caps
+              size="sm"
+              color="primary"
+              label="Resume"
+              @click="emit('resume', item.id)"
+            />
+            <q-btn
+              dense
+              flat
+              no-caps
+              size="sm"
+              color="negative"
+              label="Cancel"
+              @click="emit('cancel', item.id)"
+            />
+            <q-btn
+              dense
+              flat
+              no-caps
+              size="sm"
+              label="Hide"
+              @click="emit('hide', item.id)"
+            />
+          </div>
           <q-btn
-            v-if="canRemoveDownloadQueueItem(item.status)"
+            v-else-if="canDismissDownloadQueueItem(item.status)"
             dense
             flat
             round
             icon="close"
             size="sm"
             class="q-mt-xs"
-            @click="emit('remove', item.id)"
-          />
+            @click="emit('dismiss', item.id)"
+          >
+            <q-tooltip>Dismiss</q-tooltip>
+          </q-btn>
           <q-btn
-            v-if="isDownloadQueueItemActive(item.status)"
+            v-else-if="item.status === 'queued'"
             dense
             flat
             round
-            icon="stop"
+            icon="close"
             size="sm"
-            color="negative"
             class="q-mt-xs"
-            @click="emit('cancel', item.id)"
-          />
+            @click="emit('dismiss', item.id)"
+          >
+            <q-tooltip>Remove from queue</q-tooltip>
+          </q-btn>
         </q-item-section>
       </q-item>
     </q-list>
@@ -116,7 +172,7 @@ import type {
   DownloadQueueStatus,
 } from "@/types/filebrowser";
 import {
-  canRemoveDownloadQueueItem,
+  canDismissDownloadQueueItem,
   downloadStatusBadgeColor,
   downloadStatusLabel,
   isDownloadQueueItemActive,
@@ -131,21 +187,19 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: "clear-finished"): void;
-  (e: "stop-all"): void;
-  (e: "remove", id: string): void;
+  (e: "pause-all"): void;
+  (e: "dismiss", id: string): void;
+  (e: "pause", id: string): void;
+  (e: "resume", id: string): void;
   (e: "cancel", id: string): void;
+  (e: "hide", id: string): void;
 }>();
 
 const canClearFinished = computed(() =>
-  props.items.some(
-    (item) =>
-      item.status === "completed" ||
-      item.status === "failed" ||
-      item.status === "cancelled",
-  ),
+  props.items.some((item) => canDismissDownloadQueueItem(item.status)),
 );
 
-const canStopAll = computed(() =>
+const canPauseAll = computed(() =>
   props.items.some(
     (item) =>
       item.status === "queued" || isDownloadQueueItemActive(item.status),
@@ -156,14 +210,16 @@ function showItemProgress(item: DownloadQueueItem): boolean {
   return (
     isDownloadQueueItemActive(item.status) ||
     item.status === "completed" ||
-    item.status === "failed"
+    item.status === "failed" ||
+    item.status === "paused"
   );
 }
 
 function progressColor(status: DownloadQueueStatus): string {
   if (status === "failed") return "negative";
   if (status === "completed") return "positive";
-  if (status === "cancelled") return "warning";
+  if (status === "paused") return "warning";
+  if (status === "cancelled") return "grey-7";
   return "primary";
 }
 </script>

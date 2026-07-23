@@ -7,25 +7,64 @@
       <div class="text-subtitle2 text-weight-medium download-progress-title">
         Download
       </div>
-      <q-btn
-        v-if="canCancel"
-        dense
-        flat
-        no-caps
-        size="sm"
-        color="negative"
-        label="Stop"
-        @click="emit('cancel')"
-      />
-      <q-btn
-        v-else-if="canDismiss"
-        dense
-        flat
-        no-caps
-        size="sm"
-        label="Dismiss"
-        @click="emit('dismiss')"
-      />
+      <div class="row items-center q-gutter-xs">
+        <template v-if="isActive">
+          <q-btn
+            dense
+            flat
+            no-caps
+            size="sm"
+            label="Pause"
+            @click="emit('pause')"
+          />
+          <q-btn
+            dense
+            flat
+            no-caps
+            size="sm"
+            color="negative"
+            label="Cancel"
+            @click="emit('cancel')"
+          />
+        </template>
+        <template v-else-if="isPaused">
+          <q-btn
+            dense
+            flat
+            no-caps
+            size="sm"
+            color="primary"
+            label="Resume"
+            @click="emit('resume')"
+          />
+          <q-btn
+            dense
+            flat
+            no-caps
+            size="sm"
+            color="negative"
+            label="Cancel"
+            @click="emit('cancel')"
+          />
+          <q-btn
+            dense
+            flat
+            no-caps
+            size="sm"
+            label="Hide"
+            @click="emit('hide')"
+          />
+        </template>
+        <q-btn
+          v-else-if="canDismiss"
+          dense
+          flat
+          no-caps
+          size="sm"
+          label="Dismiss"
+          @click="emit('dismiss')"
+        />
+      </div>
     </div>
     <div class="text-caption download-progress-file q-mb-xs ellipsis">
       {{ fileName }}
@@ -65,16 +104,21 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
+  (e: "pause"): void;
+  (e: "resume"): void;
   (e: "cancel"): void;
+  (e: "hide"): void;
   (e: "dismiss"): void;
 }>();
 
-const canCancel = computed(
+const isActive = computed(
   () =>
     props.status === "initializing" ||
     props.status === "downloading" ||
     props.status === "completing",
 );
+
+const isPaused = computed(() => props.status === "paused");
 
 const canDismiss = computed(
   () =>
@@ -88,7 +132,8 @@ const progressPercent = computed(() => Math.round(props.progress * 100));
 const progressColor = computed(() => {
   if (props.status === "failed") return "negative";
   if (props.status === "completed") return "positive";
-  if (props.status === "cancelled") return "warning";
+  if (props.status === "paused") return "warning";
+  if (props.status === "cancelled") return "grey-7";
   return "primary";
 });
 
@@ -104,8 +149,10 @@ const statusLabel = computed(() => {
       return "Complete";
     case "failed":
       return props.errorMessage || "Download failed";
+    case "paused":
+      return "Paused";
     case "cancelled":
-      return "Stopped — click Download to resume";
+      return "Cancelled";
     default:
       return "";
   }

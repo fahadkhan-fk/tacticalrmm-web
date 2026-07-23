@@ -29,6 +29,9 @@
       :has-upload-path="hasUploadPath"
       :selected-count="selectedRows.length"
       :search="search"
+      :show-transfers="showTransfersIndicator"
+      :transfers-label="transfersIndicatorLabel"
+      :paused-count="pausedTransferCount"
       @upload="openFilePicker"
       @new-folder="openNewFolderDialog"
       @download="downloadSelectedItems"
@@ -37,41 +40,51 @@
       @properties="showPropertiesFromToolbar"
       @copy-path="copySelectedPathsToClipboard"
       @refresh="refresh"
+      @open-transfers="revealTransfers"
       @update:search="search = $event"
     />
 
     <FileBrowserUploadQueue
-      v-if="uploadQueueItems.length"
-      :items="uploadQueueItems"
+      v-if="visibleUploadQueueItems.length"
+      :items="visibleUploadQueueItems"
       :destination-label="uploadDestinationLabel"
       :limits-caption="uploadLimitsCaption"
-      @clear="clearUploadQueue"
-      @remove="removeUploadItem"
+      @clear-finished="clearFinishedUploads"
+      @dismiss="dismissUploadItem"
+      @pause="pauseUploadItem"
+      @resume="resumeUploadItem"
       @cancel="cancelUploadItem"
+      @hide="hideUploadItem"
     />
 
     <FileBrowserDownloadProgress
-      v-if="showCompactSingleDownload && activeSingleDownloadItem"
-      :file-name="activeSingleDownloadItem.name"
-      :progress="activeSingleDownloadItem.progress"
+      v-if="showCompactSingleDownload && visibleSingleDownloadItem"
+      :file-name="visibleSingleDownloadItem.name"
+      :progress="visibleSingleDownloadItem.progress"
       :status="singleDownloadProgressStatus"
-      :error-message="activeSingleDownloadItem.errorMessage"
+      :error-message="visibleSingleDownloadItem.errorMessage"
       :building-archive="
-        activeSingleDownloadItem.kind === 'archive' &&
-        activeSingleDownloadItem.status === 'initializing'
+        visibleSingleDownloadItem.kind === 'archive' &&
+        visibleSingleDownloadItem.status === 'initializing'
       "
-      @cancel="cancelDownloadItem(activeSingleDownloadItem.id)"
-      @dismiss="dismissDownloadUi"
+      @pause="pauseDownloadItem(visibleSingleDownloadItem.id)"
+      @resume="resumeDownloadItem(visibleSingleDownloadItem.id)"
+      @cancel="cancelDownloadItem(visibleSingleDownloadItem.id)"
+      @hide="hideDownloadItem(visibleSingleDownloadItem.id)"
+      @dismiss="dismissDownloadItem(visibleSingleDownloadItem.id)"
     />
 
     <FileBrowserDownloadQueue
       v-if="showDownloadQueuePanel"
-      :items="downloadQueue"
+      :items="visibleDownloadQueueItems"
       :summary-caption="downloadQueueSummary ?? undefined"
       @clear-finished="clearFinishedDownloads"
-      @stop-all="stopAllDownloads"
-      @remove="removeDownloadItem"
+      @pause-all="pauseAllDownloads"
+      @dismiss="dismissDownloadItem"
+      @pause="pauseDownloadItem"
+      @resume="resumeDownloadItem"
       @cancel="cancelDownloadItem"
+      @hide="hideDownloadItem"
     />
 
     <FileBrowserTable
@@ -131,6 +144,10 @@ import { computed, onMounted, ref, toRef, watch } from "vue";
 import { copyToClipboard, useQuasar } from "quasar";
 
 import {
+  cancelAgentFileDownload,
+  cancelAgentFileUpload,
+} from "@/api/filebrowser";
+import {
   createAgentFileFolder,
   deleteAgentFiles,
   fetchAgentFileProperties,
@@ -173,7 +190,20 @@ import {
   isAbortError as isUploadAbortError,
   runFileUploadTransfer,
 } from "@/services/fileTransfer/upload";
-import type { DownloadTransferStatus } from "@/types/fileTransfer";
+import {
+  archiveDownloadHandleIdbKey,
+  archiveDownloadResumeKey,
+  clearDownloadResume,
+  clearUploadResume,
+  downloadHandleIdbKey,
+  idbDeleteFileHandle,
+  loadDownloadResume,
+  loadUploadResume,
+} from "@/services/fileTransfer/resume";
+import type {
+  DownloadTransferStatus,
+  TransferAbortIntent,
+} from "@/types/fileTransfer";
 import { bytes2Human } from "@/utils/format";
 import {
   defaultFileBrowserRootPath,
@@ -187,6 +217,9 @@ import {
   isListFilesAgentOfflineError,
   isListFilesPermissionError,
   isDownloadQueueItemActive,
+  isDownloadQueueItemTerminal,
+  isUploadQueueItemActive,
+  isUploadQueueItemTerminal,
   listUploadNameConflicts,
   mapApiItemToFileBrowserItem,
   mapApiItemsToFileBrowserItems,
@@ -247,6 +280,7 @@ const fileInputRef = ref<HTMLInputElement | null>(null);
 
 const uploadQueue = ref<UploadQueueItem[]>([]);
 const uploadAbortControllers = new Map<string, AbortController>();
+const uploadAbortIntents = new Map<string, TransferAbortIntent>();
 let uploadProcessorRunning = false;
 let uploadIdSeq = 0;
 
@@ -254,6 +288,7 @@ const downloadQueue = ref<DownloadQueueItem[]>([]);
 const downloadQueueSummary = ref<string | null>(null);
 const downloadBatchIsSingle = ref(false);
 const downloadAbortControllers = new Map<string, AbortController>();
+const downloadAbortIntents = new Map<string, TransferAbortIntent>();
 let downloadProcessorRunning = false;
 let downloadIdSeq = 0;
 let downloadStopAllRequested = false;
@@ -261,29 +296,77 @@ let loadSeq = 0;
 
 const mutationSaving = ref(false);
 
-const uploadQueueItems = computed<UploadQueueItem[]>(() => uploadQueue.value);
+const visibleUploadQueueItems = computed(() =>
+  uploadQueue.value.filter((item) => !item.hidden),
+);
+
 const hasUploadPath = computed(() => currentPath.value.trim().length > 0);
 
-const activeSingleDownloadItem = computed(() => {
+const singleDownloadEntry = computed(() => {
   if (!downloadBatchIsSingle.value || downloadQueue.value.length !== 1) {
     return null;
   }
   return downloadQueue.value[0];
 });
 
+const visibleSingleDownloadItem = computed(() => {
+  const item = singleDownloadEntry.value;
+  if (!item || item.hidden) return null;
+  return item;
+});
+
+const visibleDownloadQueueItems = computed(() =>
+  downloadQueue.value.filter((item) => !item.hidden),
+);
+
 const showCompactSingleDownload = computed(
-  () => downloadBatchIsSingle.value && downloadQueue.value.length === 1,
+  () => !!visibleSingleDownloadItem.value,
 );
 
 const showDownloadQueuePanel = computed(
-  () => downloadQueue.value.length > 0 && !showCompactSingleDownload.value,
+  () =>
+    visibleDownloadQueueItems.value.length > 0 &&
+    !showCompactSingleDownload.value,
 );
 
 const singleDownloadProgressStatus = computed((): DownloadTransferStatus => {
-  const item = activeSingleDownloadItem.value;
+  const item = visibleSingleDownloadItem.value;
   if (!item) return "idle";
   if (item.status === "queued") return "initializing";
   return item.status as DownloadTransferStatus;
+});
+
+const pausedTransferCount = computed(() => {
+  const pausedDownloads = downloadQueue.value.filter(
+    (item) => item.status === "paused",
+  ).length;
+  const pausedUploads = uploadQueue.value.filter(
+    (item) => item.status === "paused",
+  ).length;
+  return pausedDownloads + pausedUploads;
+});
+
+const activeTransferCount = computed(() => {
+  const activeDownloads = downloadQueue.value.filter((item) =>
+    isDownloadQueueItemActive(item.status),
+  ).length;
+  const activeUploads = uploadQueue.value.filter((item) =>
+    isUploadQueueItemActive(item.status),
+  ).length;
+  return activeDownloads + activeUploads;
+});
+
+const showTransfersIndicator = computed(
+  () => activeTransferCount.value > 0 || pausedTransferCount.value > 0,
+);
+
+const transfersIndicatorLabel = computed(() => {
+  if (pausedTransferCount.value > 0) {
+    return pausedTransferCount.value === 1
+      ? "Transfers · 1 paused"
+      : `Transfers · ${pausedTransferCount.value} paused`;
+  }
+  return "Transfers";
 });
 
 const rows = ref<FileBrowserItem[]>([]);
@@ -291,9 +374,10 @@ const rows = ref<FileBrowserItem[]>([]);
 const rowNames = computed(() => rows.value.map((r) => r.name));
 
 const uploadDestinationLabel = computed(() => {
-  if (!uploadQueue.value.length) return "";
-  const first = uploadQueue.value[0].destinationPath;
-  const allSame = uploadQueue.value.every((i) => i.destinationPath === first);
+  const visible = visibleUploadQueueItems.value;
+  if (!visible.length) return "";
+  const first = visible[0].destinationPath;
+  const allSame = visible.every((i) => i.destinationPath === first);
   return allSame ? first : `${first} (+ other paths in queue)`;
 });
 
@@ -619,8 +703,27 @@ function resetDownloadUiState() {
   downloadBatchIsSingle.value = false;
 }
 
-function dismissDownloadUi() {
-  resetDownloadUiState();
+function revealTransfers() {
+  for (const item of downloadQueue.value) {
+    if (
+      item.hidden &&
+      (item.status === "paused" ||
+        isDownloadQueueItemActive(item.status) ||
+        item.status === "queued")
+    ) {
+      item.hidden = false;
+    }
+  }
+  for (const item of uploadQueue.value) {
+    if (
+      item.hidden &&
+      (item.status === "paused" ||
+        isUploadQueueItemActive(item.status) ||
+        item.status === "queued")
+    ) {
+      item.hidden = false;
+    }
+  }
 }
 
 function pruneFinishedDownloadsBeforeNewBatch() {
@@ -628,7 +731,9 @@ function pruneFinishedDownloadsBeforeNewBatch() {
 
   downloadQueue.value = downloadQueue.value.filter(
     (item) =>
-      item.status === "queued" || isDownloadQueueItemActive(item.status),
+      item.status === "queued" ||
+      item.status === "paused" ||
+      isDownloadQueueItemActive(item.status),
   );
   if (!downloadQueue.value.length) {
     downloadQueueSummary.value = null;
@@ -642,9 +747,10 @@ function scheduleSingleDownloadAutoDismiss(itemId: string) {
       downloadBatchIsSingle.value &&
       downloadQueue.value.length === 1 &&
       downloadQueue.value[0]?.id === itemId &&
-      downloadQueue.value[0]?.status === "completed"
+      downloadQueue.value[0]?.status === "completed" &&
+      !downloadQueue.value[0]?.hidden
     ) {
-      dismissDownloadUi();
+      dismissDownloadItem(itemId);
     }
   }, 4000);
 }
@@ -758,7 +864,7 @@ async function confirmContinueAfterDownloadFailure(
       cancel: true,
       persistent: true,
       ok: { label: "Continue", color: "primary" },
-      cancel: { label: "Stop", flat: true, color: "negative" },
+      cancel: { label: "Pause remaining", flat: true, color: "negative" },
     })
       .onOk(() => resolve(true))
       .onCancel(() => resolve(false));
@@ -769,7 +875,7 @@ function cancelRemainingDownloads() {
   downloadStopAllRequested = true;
   for (const item of downloadQueue.value) {
     if (item.status === "queued") {
-      item.status = "cancelled";
+      item.status = "paused";
     }
   }
 }
@@ -777,12 +883,13 @@ function cancelRemainingDownloads() {
 function notifyDownloadBatchSummary(
   succeeded: number,
   failed: number,
+  paused: number,
   cancelled: number,
 ) {
-  const total = succeeded + failed + cancelled;
+  const total = succeeded + failed + paused + cancelled;
   if (total === 0) return;
 
-  if (failed === 0 && cancelled === 0) {
+  if (failed === 0 && paused === 0 && cancelled === 0) {
     if (succeeded === 1) {
       notifySuccess("Download complete.");
       downloadQueueSummary.value = "All downloads finished successfully.";
@@ -793,7 +900,7 @@ function notifyDownloadBatchSummary(
     return;
   }
 
-  if (succeeded === 0 && failed > 0 && cancelled === 0) {
+  if (succeeded === 0 && failed > 0 && paused === 0 && cancelled === 0) {
     notifyError(
       failed === 1 ? "Download failed." : `All ${failed} downloads failed.`,
     );
@@ -805,7 +912,8 @@ function notifyDownloadBatchSummary(
   const parts: string[] = [];
   if (succeeded > 0) parts.push(`${succeeded} succeeded`);
   if (failed > 0) parts.push(`${failed} failed`);
-  if (cancelled > 0) parts.push(`${cancelled} stopped`);
+  if (paused > 0) parts.push(`${paused} paused`);
+  if (cancelled > 0) parts.push(`${cancelled} cancelled`);
 
   downloadQueueSummary.value = `Finished: ${parts.join(", ")}.`;
   notifyWarning(`Downloads finished: ${parts.join(", ")}.`);
@@ -864,12 +972,20 @@ async function runSingleDownload(itemId: string): Promise<void> {
   item.progress = 0;
 
   const controller = new AbortController();
+  const abortIntent: TransferAbortIntent = { mode: "pause" };
   downloadAbortControllers.set(itemId, controller);
+  downloadAbortIntents.set(itemId, abortIntent);
 
   try {
     const transferOptions = {
       signal: controller.signal,
+      abortIntent,
       chunkSize: FILE_TRANSFER_DEFAULT_CHUNK_SIZE,
+      knownSessionId: item.sessionId,
+      onSession: (sessionId: string) => {
+        const current = findDownloadItem(itemId);
+        if (current) current.sessionId = sessionId;
+      },
       onProgress: ({
         committedOffset,
         totalSize,
@@ -916,6 +1032,8 @@ async function runSingleDownload(itemId: string): Promise<void> {
 
     current.status = "completed";
     current.progress = 1;
+    current.hidden = false;
+    current.sessionId = undefined;
 
     if (result.warnings && result.warnings.length > 0) {
       const shown = result.warnings.slice(0, 5).join("; ");
@@ -941,21 +1059,29 @@ async function runSingleDownload(itemId: string): Promise<void> {
     if (!current) return;
 
     if (isDownloadAbortError(err)) {
-      current.status = "cancelled";
+      const mode = downloadAbortIntents.get(itemId)?.mode ?? "pause";
+      current.status = mode === "cancel" ? "cancelled" : "paused";
       current.errorMessage = undefined;
+      if (mode === "cancel") {
+        current.sessionId = undefined;
+      }
       if (downloadBatchIsSingle.value && downloadQueue.value.length === 1) {
-        notifyInfo("Download cancelled.");
+        notifyInfo(
+          mode === "cancel" ? "Download cancelled." : "Download paused.",
+        );
       }
       return;
     }
 
     current.status = "failed";
+    current.hidden = false;
     current.errorMessage = getFileBrowserErrorMessage(err, "Download failed.");
     if (downloadBatchIsSingle.value && downloadQueue.value.length === 1) {
       notifyError(current.errorMessage);
     }
   } finally {
     downloadAbortControllers.delete(itemId);
+    downloadAbortIntents.delete(itemId);
   }
 }
 
@@ -987,13 +1113,14 @@ async function processDownloadQueue(): Promise<void> {
       const current = findDownloadItem(next.id);
       if (!current) continue;
 
-      if (current.status === "cancelled") {
+      // Individual pause/cancel should not halt the rest of the batch.
+      // Only "Pause all" (downloadStopAllRequested) ends remaining work.
+      if (downloadStopAllRequested) {
+        cancelRemainingDownloads();
         break;
       }
 
       if (current.status === "failed") {
-        if (downloadStopAllRequested) break;
-
         const shouldContinue =
           await confirmContinueAfterDownloadFailure(current);
         if (!shouldContinue) {
@@ -1016,10 +1143,13 @@ async function processDownloadQueue(): Promise<void> {
       const failed = batchItems.filter(
         (item) => item.status === "failed",
       ).length;
+      const paused = batchItems.filter(
+        (item) => item.status === "paused",
+      ).length;
       const cancelled = batchItems.filter(
         (item) => item.status === "cancelled",
       ).length;
-      notifyDownloadBatchSummary(succeeded, failed, cancelled);
+      notifyDownloadBatchSummary(succeeded, failed, paused, cancelled);
     }
 
     if (downloadQueue.value.some((item) => item.status === "queued")) {
@@ -1028,41 +1158,106 @@ async function processDownloadQueue(): Promise<void> {
   }
 }
 
-function cancelDownloadItem(id: string) {
+function abortDownloadItem(
+  id: string,
+  mode: TransferAbortIntent["mode"],
+): void {
+  const intent = downloadAbortIntents.get(id);
+  if (intent) intent.mode = mode;
   downloadAbortControllers.get(id)?.abort();
+
   const item = findDownloadItem(id);
   if (item && item.status === "queued") {
-    item.status = "cancelled";
+    item.status = mode === "cancel" ? "cancelled" : "paused";
   }
 }
 
-function removeDownloadItem(id: string) {
-  cancelDownloadItem(id);
-  downloadQueue.value = downloadQueue.value.filter((item) => item.id !== id);
+function pauseDownloadItem(id: string) {
+  abortDownloadItem(id, "pause");
+}
+
+function cancelDownloadItem(id: string) {
+  const item = findDownloadItem(id);
+  if (item?.status === "paused") {
+    void discardPausedDownload(item);
+    return;
+  }
+  abortDownloadItem(id, "cancel");
+}
+
+async function discardPausedDownload(item: DownloadQueueItem): Promise<void> {
+  item.status = "cancelled";
+  item.hidden = false;
+  item.errorMessage = undefined;
+
+  const resumeScopeKey =
+    item.kind === "archive" && item.archivePaths?.length
+      ? archiveDownloadResumeKey(props.agent_id, item.archivePaths)
+      : item.sourcePath;
+  const handleKey =
+    item.kind === "archive" && item.archivePaths?.length
+      ? archiveDownloadHandleIdbKey(props.agent_id, item.archivePaths)
+      : downloadHandleIdbKey(props.agent_id, item.sourcePath);
+
+  const saved = loadDownloadResume(props.agent_id, resumeScopeKey);
+  const sessionId = item.sessionId || saved?.sessionId;
+  if (sessionId) {
+    try {
+      await cancelAgentFileDownload(props.agent_id, sessionId, "user");
+    } catch {
+      // best-effort slot release
+    }
+  }
+  item.sessionId = undefined;
+  clearDownloadResume(props.agent_id, resumeScopeKey);
+  await idbDeleteFileHandle(handleKey).catch(() => {});
+  notifyInfo("Download cancelled.");
+}
+
+function resumeDownloadItem(id: string) {
+  const item = findDownloadItem(id);
+  if (!item || item.status !== "paused") return;
+  item.hidden = false;
+  item.status = "queued";
+  item.errorMessage = undefined;
+  void processDownloadQueue();
+}
+
+function hideDownloadItem(id: string) {
+  const item = findDownloadItem(id);
+  if (!item || item.status !== "paused") return;
+  item.hidden = true;
+}
+
+function dismissDownloadItem(id: string) {
+  const item = findDownloadItem(id);
+  if (!item) return;
+  if (item.status === "queued" || isDownloadQueueItemTerminal(item.status)) {
+    downloadQueue.value = downloadQueue.value.filter(
+      (entry) => entry.id !== id,
+    );
+  }
   if (!downloadQueue.value.length) {
-    dismissDownloadUi();
+    resetDownloadUiState();
   }
 }
 
 function clearFinishedDownloads() {
   downloadQueue.value = downloadQueue.value.filter(
-    (item) =>
-      item.status !== "completed" &&
-      item.status !== "failed" &&
-      item.status !== "cancelled",
+    (item) => !isDownloadQueueItemTerminal(item.status),
   );
   if (!downloadQueue.value.length) {
-    dismissDownloadUi();
+    resetDownloadUiState();
   }
 }
 
-function stopAllDownloads() {
+function pauseAllDownloads() {
   downloadStopAllRequested = true;
   for (const item of downloadQueue.value) {
     if (isDownloadQueueItemActive(item.status)) {
-      downloadAbortControllers.get(item.id)?.abort();
+      abortDownloadItem(item.id, "pause");
     } else if (item.status === "queued") {
-      item.status = "cancelled";
+      item.status = "paused";
     }
   }
 }
@@ -1292,7 +1487,7 @@ async function queueFilesForUpload(files: File[]) {
     maxFileBytes > 0 ? batch.filter((f) => f.size > maxFileBytes).length : 0;
   const sizeOk =
     maxFileBytes > 0 ? batch.filter((f) => f.size <= maxFileBytes) : batch;
-  const toEnqueue = sizeOk.slice(0, room);
+  let toEnqueue = sizeOk.slice(0, room);
   const skippedDueToQueue = sizeOk.length - toEnqueue.length;
 
   if (skippedOversized > 0) {
@@ -1391,7 +1586,9 @@ async function runSingleUpload(itemId: string): Promise<void> {
   item.progress = 0;
 
   const controller = new AbortController();
+  const abortIntent: TransferAbortIntent = { mode: "pause" };
   uploadAbortControllers.set(itemId, controller);
+  uploadAbortIntents.set(itemId, abortIntent);
 
   try {
     const result = await runFileUploadTransfer(
@@ -1400,7 +1597,13 @@ async function runSingleUpload(itemId: string): Promise<void> {
       item.destinationPath,
       {
         signal: controller.signal,
+        abortIntent,
         chunkSize: FILE_TRANSFER_DEFAULT_CHUNK_SIZE,
+        knownSessionId: item.sessionId,
+        onSession: (sessionId: string) => {
+          const current = findUploadItem(itemId);
+          if (current) current.sessionId = sessionId;
+        },
         onProgress: (p) => updateUploadProgress(itemId, p),
       },
     );
@@ -1410,6 +1613,8 @@ async function runSingleUpload(itemId: string): Promise<void> {
 
     current.status = "completed";
     current.progress = 1;
+    current.hidden = false;
+    current.sessionId = undefined;
     notifySuccess(
       result.integrityOk
         ? `Uploaded "${item.name}" to ${result.destinationPath}. Integrity verified.`
@@ -1421,17 +1626,23 @@ async function runSingleUpload(itemId: string): Promise<void> {
     if (!current) return;
 
     if (isUploadAbortError(err)) {
-      current.status = "cancelled";
+      const mode = uploadAbortIntents.get(itemId)?.mode ?? "pause";
+      current.status = mode === "cancel" ? "cancelled" : "paused";
       current.errorMessage = undefined;
-      notifyInfo("Upload cancelled.");
+      if (mode === "cancel") {
+        current.sessionId = undefined;
+      }
+      notifyInfo(mode === "cancel" ? "Upload cancelled." : "Upload paused.");
       return;
     }
 
     current.status = "failed";
+    current.hidden = false;
     current.errorMessage = getFileBrowserErrorMessage(err, "Upload failed.");
     notifyError(`"${item.name}": ${current.errorMessage}`);
   } finally {
     uploadAbortControllers.delete(itemId);
+    uploadAbortIntents.delete(itemId);
   }
 }
 
@@ -1453,22 +1664,80 @@ async function processUploadQueue(): Promise<void> {
   }
 }
 
-function cancelUploadItem(id: string) {
+function abortUploadItem(id: string, mode: TransferAbortIntent["mode"]): void {
+  const intent = uploadAbortIntents.get(id);
+  if (intent) intent.mode = mode;
   uploadAbortControllers.get(id)?.abort();
+
+  const item = findUploadItem(id);
+  if (item && item.status === "queued") {
+    item.status = mode === "cancel" ? "cancelled" : "paused";
+  }
 }
 
-function removeUploadItem(id: string) {
-  cancelUploadItem(id);
-  uploadQueue.value = uploadQueue.value.filter((i) => i.id !== id);
+function pauseUploadItem(id: string) {
+  abortUploadItem(id, "pause");
 }
 
-function clearUploadQueue() {
-  for (const item of uploadQueue.value) {
-    if (item.status === "uploading") {
-      uploadAbortControllers.get(item.id)?.abort();
+function cancelUploadItem(id: string) {
+  const item = findUploadItem(id);
+  if (item?.status === "paused") {
+    void discardPausedUpload(item);
+    return;
+  }
+  abortUploadItem(id, "cancel");
+}
+
+async function discardPausedUpload(item: UploadQueueItem): Promise<void> {
+  item.status = "cancelled";
+  item.hidden = false;
+  item.errorMessage = undefined;
+
+  const saved = loadUploadResume(
+    props.agent_id,
+    item.file,
+    item.destinationPath,
+  );
+  const sessionId = item.sessionId || saved?.sessionId;
+  if (sessionId) {
+    try {
+      await cancelAgentFileUpload(props.agent_id, sessionId, "user");
+    } catch {
+      // best-effort slot release
     }
   }
-  uploadQueue.value = [];
+  item.sessionId = undefined;
+  clearUploadResume(props.agent_id, item.file, item.destinationPath);
+  notifyInfo("Upload cancelled.");
+}
+
+function resumeUploadItem(id: string) {
+  const item = findUploadItem(id);
+  if (!item || item.status !== "paused") return;
+  item.hidden = false;
+  item.status = "queued";
+  item.errorMessage = undefined;
+  void processUploadQueue();
+}
+
+function hideUploadItem(id: string) {
+  const item = findUploadItem(id);
+  if (!item || item.status !== "paused") return;
+  item.hidden = true;
+}
+
+function dismissUploadItem(id: string) {
+  const item = findUploadItem(id);
+  if (!item) return;
+  if (item.status === "queued" || isUploadQueueItemTerminal(item.status)) {
+    uploadQueue.value = uploadQueue.value.filter((entry) => entry.id !== id);
+  }
+}
+
+function clearFinishedUploads() {
+  uploadQueue.value = uploadQueue.value.filter(
+    (item) => !isUploadQueueItemTerminal(item.status),
+  );
 }
 
 function syncFileDropOverlay() {

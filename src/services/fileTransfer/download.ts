@@ -19,6 +19,7 @@ import type {
   FileTransferDownloadResult,
   FileTransferDownloadStatusResponse,
   FileTransferProgress,
+  TransferAbortIntent,
 } from "@/types/fileTransfer";
 
 import { createSha256Hasher, hashBlobPrefix, hashBytes } from "./hash";
@@ -39,9 +40,18 @@ import {
 
 export interface RunFileDownloadOptions {
   signal?: AbortSignal;
+  /** Shared intent object — mutate `.mode` before abort() ("pause" | "cancel"). */
+  abortIntent?: TransferAbortIntent;
   chunkSize?: number;
   onProgress?: (progress: FileTransferProgress) => void;
   onStatus?: (status: "initializing" | "downloading" | "completing") => void;
+  /** Called once the server session id is known (init or resume). */
+  onSession?: (sessionId: string) => void;
+  /**
+   * Session id already known to the UI (e.g. paused queue item). Used to
+   * release the server slot if resume cannot continue that session.
+   */
+  knownSessionId?: string;
   onArchiveBuilding?: () => void;
 }
 
@@ -63,13 +73,23 @@ function fileNameFromPath(sourcePath: string): string {
 async function releaseDownloadSession(
   agentId: string,
   sessionId: string | null | undefined,
+  reason: "user" | "error" = "error",
 ): Promise<void> {
   if (!sessionId) return;
   try {
-    await cancelAgentFileDownload(agentId, sessionId, "error");
+    await cancelAgentFileDownload(agentId, sessionId, reason);
   } catch {
     // frees agent session slot for retry
   }
+}
+
+async function discardDownloadResumeState(
+  agentId: string,
+  resumeScopeKey: string,
+  handleKey: string,
+): Promise<void> {
+  clearDownloadResume(agentId, resumeScopeKey);
+  await idbDeleteFileHandle(handleKey).catch(() => {});
 }
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -145,6 +165,8 @@ async function createDownloadSink(
   sink: DownloadSink;
   resumeOffset: number;
   resumeSessionId: string | null;
+  /** Prior session left behind when the partial file could not be reopened. */
+  abandonedSessionId: string | null;
   usesMemoryBuffer: boolean;
 }> {
   const canFS = "showSaveFilePicker" in window;
@@ -157,6 +179,7 @@ async function createDownloadSink(
   let buffers: ArrayBuffer[] | null = null;
   let resumeOffset = 0;
   let resumeSessionId: string | null = null;
+  let abandonedSessionId: string | null = null;
 
   if (saved && canFS) {
     try {
@@ -179,9 +202,15 @@ async function createDownloadSink(
   }
 
   if (!writable) {
+    abandonedSessionId = saved?.sessionId ?? null;
     resumeOffset = 0;
     resumeSessionId = null;
     clearDownloadResume(agentId, resumeScopeKey);
+    // Free the old slot before any new init (archive beforeSavePicker).
+    if (abandonedSessionId) {
+      await releaseDownloadSession(agentId, abandonedSessionId, "user");
+      abandonedSessionId = null;
+    }
     if (canFS) {
       try {
         if (signal?.aborted) {
@@ -253,6 +282,7 @@ async function createDownloadSink(
     sink,
     resumeOffset,
     resumeSessionId,
+    abandonedSessionId,
     usesMemoryBuffer: buffers !== null,
   };
 }
@@ -262,12 +292,24 @@ export async function runFileDownloadTransfer(
   sourcePath: string,
   options: RunFileDownloadOptions = {},
 ): Promise<FileTransferDownloadResult> {
-  const { signal, onProgress, onStatus } = options;
+  const {
+    signal,
+    abortIntent,
+    onProgress,
+    onStatus,
+    onSession,
+    knownSessionId,
+  } = options;
   const fileName = fileNameFromPath(sourcePath);
 
   onStatus?.("initializing");
-  const { sink, resumeOffset, resumeSessionId, usesMemoryBuffer } =
-    await createDownloadSink(agentId, sourcePath, fileName, signal);
+  const {
+    sink,
+    resumeOffset,
+    resumeSessionId,
+    abandonedSessionId,
+    usesMemoryBuffer,
+  } = await createDownloadSink(agentId, sourcePath, fileName, signal);
 
   const handleKey = downloadHandleIdbKey(agentId, sourcePath);
   let initData = null as Awaited<
@@ -275,6 +317,8 @@ export async function runFileDownloadTransfer(
   > | null;
   let effectiveResumeOffset = resumeOffset;
   let sessionId: string | null = null;
+  let staleSessionId: string | null =
+    abandonedSessionId || (!resumeSessionId ? knownSessionId || null : null);
 
   try {
     if (resumeSessionId && resumeOffset >= 0) {
@@ -284,6 +328,7 @@ export async function runFileDownloadTransfer(
           resume_offset: resumeOffset,
         });
       } catch {
+        staleSessionId = resumeSessionId;
         clearDownloadResume(agentId, sourcePath);
         initData = null;
         effectiveResumeOffset = 0;
@@ -291,6 +336,10 @@ export async function runFileDownloadTransfer(
     }
 
     if (!initData) {
+      if (staleSessionId) {
+        await releaseDownloadSession(agentId, staleSessionId, "user");
+        staleSessionId = null;
+      }
       initData = await initAgentFileDownload(agentId, {
         source_path: sourcePath,
         chunk_size: options.chunkSize ?? FILE_TRANSFER_DEFAULT_CHUNK_SIZE,
@@ -300,6 +349,7 @@ export async function runFileDownloadTransfer(
 
     const sessionIdValue = initData.session_id;
     sessionId = sessionIdValue;
+    onSession?.(sessionIdValue);
     const totalSize = initData.total_size;
     const chunkSize = initData.chunk_size;
     let committedOffset =
@@ -386,8 +436,14 @@ export async function runFileDownloadTransfer(
     };
   } catch (err) {
     await sink.abort();
-    if (!isAbortError(err)) {
-      await releaseDownloadSession(agentId, sessionId);
+    if (isAbortError(err)) {
+      if (abortIntent?.mode === "cancel") {
+        await releaseDownloadSession(agentId, sessionId, "user");
+        await discardDownloadResumeState(agentId, sourcePath, handleKey);
+      }
+    } else {
+      await releaseDownloadSession(agentId, sessionId, "error");
+      await discardDownloadResumeState(agentId, sourcePath, handleKey);
     }
     throw err;
   }
@@ -399,7 +455,15 @@ export async function runArchiveDownloadTransfer(
   suggestedFileName: string,
   options: RunFileDownloadOptions = {},
 ): Promise<FileTransferDownloadResult> {
-  const { signal, onProgress, onStatus, onArchiveBuilding } = options;
+  const {
+    signal,
+    abortIntent,
+    onProgress,
+    onStatus,
+    onSession,
+    knownSessionId,
+    onArchiveBuilding,
+  } = options;
   const resumeScopeKey = archiveDownloadResumeKey(agentId, paths);
   const fileName = suggestedFileName.trim() || "download.zip";
   const handleKey = archiveDownloadHandleIdbKey(agentId, paths);
@@ -413,34 +477,42 @@ export async function runArchiveDownloadTransfer(
   let sink: DownloadSink;
   let resumeOffset = 0;
   let resumeSessionId: string | null = null;
+  let abandonedSessionId: string | null = null;
   let usesMemoryBuffer = false;
 
   try {
-    ({ sink, resumeOffset, resumeSessionId, usesMemoryBuffer } =
-      await createDownloadSink(
-        agentId,
-        resumeScopeKey,
-        fileName,
-        signal,
-        handleKey,
-        async () => {
-          onArchiveBuilding?.();
-          initData = await initAgentArchiveDownload(agentId, {
-            paths,
-            filename: fileName,
-            chunk_size: options.chunkSize ?? FILE_TRANSFER_DEFAULT_CHUNK_SIZE,
-          });
-          sessionId = initData.session_id;
-        },
-      ));
+    ({
+      sink,
+      resumeOffset,
+      resumeSessionId,
+      abandonedSessionId,
+      usesMemoryBuffer,
+    } = await createDownloadSink(
+      agentId,
+      resumeScopeKey,
+      fileName,
+      signal,
+      handleKey,
+      async () => {
+        onArchiveBuilding?.();
+        initData = await initAgentArchiveDownload(agentId, {
+          paths,
+          filename: fileName,
+          chunk_size: options.chunkSize ?? FILE_TRANSFER_DEFAULT_CHUNK_SIZE,
+        });
+        sessionId = initData.session_id;
+      },
+    ));
   } catch (err) {
     if (sessionId) {
-      await releaseDownloadSession(agentId, sessionId);
+      await releaseDownloadSession(agentId, sessionId, "error");
     }
     throw err;
   }
 
   let effectiveResumeOffset = resumeOffset;
+  let staleSessionId: string | null =
+    abandonedSessionId || (!resumeSessionId ? knownSessionId || null : null);
 
   try {
     if (resumeSessionId && resumeOffset >= 0) {
@@ -451,6 +523,7 @@ export async function runArchiveDownloadTransfer(
         });
         sessionId = initData.session_id;
       } catch {
+        staleSessionId = resumeSessionId;
         clearDownloadResume(agentId, resumeScopeKey);
         initData = null;
         sessionId = null;
@@ -459,6 +532,10 @@ export async function runArchiveDownloadTransfer(
     }
 
     if (!initData) {
+      if (staleSessionId && staleSessionId !== sessionId) {
+        await releaseDownloadSession(agentId, staleSessionId, "user");
+        staleSessionId = null;
+      }
       if (!sessionId) {
         onArchiveBuilding?.();
         initData = await initAgentArchiveDownload(agentId, {
@@ -473,6 +550,7 @@ export async function runArchiveDownloadTransfer(
 
     const sessionIdValue = initData.session_id;
     sessionId = sessionIdValue;
+    onSession?.(sessionIdValue);
 
     let totalSize = initData.total_size;
     let chunkSize = initData.chunk_size;
@@ -574,8 +652,14 @@ export async function runArchiveDownloadTransfer(
     };
   } catch (err) {
     await sink.abort();
-    if (!isAbortError(err)) {
-      await releaseDownloadSession(agentId, sessionId);
+    if (isAbortError(err)) {
+      if (abortIntent?.mode === "cancel") {
+        await releaseDownloadSession(agentId, sessionId, "user");
+        await discardDownloadResumeState(agentId, resumeScopeKey, handleKey);
+      }
+    } else {
+      await releaseDownloadSession(agentId, sessionId, "error");
+      await discardDownloadResumeState(agentId, resumeScopeKey, handleKey);
     }
     throw err;
   }

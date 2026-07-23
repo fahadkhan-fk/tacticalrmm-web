@@ -105,7 +105,7 @@
 
 <script>
 // composition imports
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, defineAsyncComponent } from "vue";
 import { useRoute } from "vue-router";
 import { useQuasar, useMeta } from "quasar";
 import {
@@ -119,9 +119,13 @@ import ProcessManager from "@/components/agents/remotebg/ProcessManager.vue";
 import ServicesManager from "@/components/agents/remotebg/ServicesManager.vue";
 import EventLogManager from "@/components/agents/remotebg/EventLogManager.vue";
 import RegistryManager from "@/components/agents/remotebg/RegistryManager.vue";
-import FileBrowserManager from "@/components/agents/remotebg/FileBrowserManager.vue";
 import registryIcon from "../assets/windows-registry.png";
 import TerminalManager from "@/components/agents/remotebg/TerminalManager.vue";
+
+// Lazy-load so a File Browser module error cannot blank the whole Remote BG page.
+const FileBrowserManager = defineAsyncComponent(
+  () => import("@/components/agents/remotebg/FileBrowserManager.vue"),
+);
 
 export default {
   name: "RemoteBackground",

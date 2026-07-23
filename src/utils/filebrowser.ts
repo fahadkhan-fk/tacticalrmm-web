@@ -402,8 +402,10 @@ export function uploadStatusLabel(status: UploadQueueStatus): string {
       return "Uploaded";
     case "failed":
       return "Failed";
+    case "paused":
+      return "Paused";
     case "cancelled":
-      return "Stopped";
+      return "Cancelled";
     default:
       return status;
   }
@@ -419,8 +421,10 @@ export function uploadStatusBadgeColor(status: UploadQueueStatus): string {
       return "positive";
     case "failed":
       return "negative";
-    case "cancelled":
+    case "paused":
       return "warning";
+    case "cancelled":
+      return "grey-7";
     default:
       return "grey-5";
   }
@@ -468,8 +472,10 @@ export function downloadStatusLabel(status: DownloadQueueStatus): string {
       return "Downloaded";
     case "failed":
       return "Failed";
+    case "paused":
+      return "Paused";
     case "cancelled":
-      return "Stopped";
+      return "Cancelled";
     default:
       return status;
   }
@@ -487,21 +493,38 @@ export function downloadStatusBadgeColor(status: DownloadQueueStatus): string {
       return "positive";
     case "failed":
       return "negative";
-    case "cancelled":
+    case "paused":
       return "warning";
+    case "cancelled":
+      return "grey-7";
     default:
       return "grey-5";
   }
 }
 
-export function canRemoveDownloadQueueItem(
+export function isDownloadQueueItemTerminal(
   status: DownloadQueueStatus,
 ): boolean {
   return (
-    status !== "downloading" &&
-    status !== "initializing" &&
-    status !== "completing"
+    status === "completed" || status === "failed" || status === "cancelled"
   );
+}
+
+export function canDismissDownloadQueueItem(
+  status: DownloadQueueStatus,
+): boolean {
+  return isDownloadQueueItemTerminal(status);
+}
+
+export function canHideDownloadQueueItem(status: DownloadQueueStatus): boolean {
+  return status === "paused";
+}
+
+/** @deprecated Prefer canDismissDownloadQueueItem / canHideDownloadQueueItem. */
+export function canRemoveDownloadQueueItem(
+  status: DownloadQueueStatus,
+): boolean {
+  return canDismissDownloadQueueItem(status) || status === "queued";
 }
 
 export function isDownloadQueueItemActive(
@@ -511,6 +534,16 @@ export function isDownloadQueueItemActive(
     status === "initializing" ||
     status === "downloading" ||
     status === "completing"
+  );
+}
+
+export function isUploadQueueItemActive(status: UploadQueueStatus): boolean {
+  return status === "uploading";
+}
+
+export function isUploadQueueItemTerminal(status: UploadQueueStatus): boolean {
+  return (
+    status === "completed" || status === "failed" || status === "cancelled"
   );
 }
 

@@ -175,7 +175,7 @@
 import { computed, ref, useModel } from "vue";
 import { useQuasar } from "quasar";
 
-import { fileBrowserTableColumns } from "@/constants/filebrowser";
+import { fileBrowserTableColumns } from "@/utils/filebrowserColumns";
 import type { FileBrowserItem } from "@/types/filebrowser";
 
 const $q = useQuasar();

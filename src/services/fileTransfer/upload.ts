@@ -9,6 +9,7 @@ import { FILE_TRANSFER_DEFAULT_CHUNK_SIZE } from "@/constants/fileTransfer";
 import type {
   FileTransferProgress,
   FileTransferUploadResult,
+  TransferAbortIntent,
 } from "@/types/fileTransfer";
 
 import { createSha256Hasher, hashFilePrefix, hashBytes } from "./hash";
@@ -21,17 +22,24 @@ import {
 
 export interface RunFileUploadOptions {
   signal?: AbortSignal;
+  /** Shared intent object — mutate `.mode` before abort() ("pause" | "cancel"). */
+  abortIntent?: TransferAbortIntent;
   chunkSize?: number;
   onProgress?: (progress: FileTransferProgress) => void;
+  /** Called once the server session id is known (init or resume). */
+  onSession?: (sessionId: string) => void;
+  /** Session id already known to the UI (e.g. paused queue item). */
+  knownSessionId?: string;
 }
 
 async function releaseUploadSession(
   agentId: string,
   sessionId: string | null | undefined,
+  reason: "user" | "error" = "error",
 ): Promise<void> {
   if (!sessionId) return;
   try {
-    await cancelAgentFileUpload(agentId, sessionId, "error");
+    await cancelAgentFileUpload(agentId, sessionId, reason);
   } catch {
     // frees the server session slot for retry
   }
@@ -43,11 +51,13 @@ export async function runFileUploadTransfer(
   destinationPath: string,
   options: RunFileUploadOptions = {},
 ): Promise<FileTransferUploadResult> {
-  const { signal, onProgress } = options;
+  const { signal, abortIntent, onProgress, onSession, knownSessionId } =
+    options;
   const totalSize = file.size;
   const saved = loadUploadResume(agentId, file, destinationPath);
 
   let initData = null as Awaited<ReturnType<typeof initAgentFileUpload>> | null;
+  let staleSessionId: string | null = null;
 
   if (saved?.sessionId) {
     try {
@@ -57,12 +67,19 @@ export async function runFileUploadTransfer(
         total_size: totalSize,
       });
     } catch {
+      staleSessionId = saved.sessionId;
       clearUploadResume(agentId, file, destinationPath);
       initData = null;
     }
+  } else if (knownSessionId) {
+    staleSessionId = knownSessionId;
   }
 
   if (!initData) {
+    if (staleSessionId) {
+      await releaseUploadSession(agentId, staleSessionId, "user");
+      staleSessionId = null;
+    }
     initData = await initAgentFileUpload(agentId, {
       filename: file.name,
       destination_path: destinationPath,
@@ -73,6 +90,7 @@ export async function runFileUploadTransfer(
   }
 
   const sessionId = initData.session_id;
+  onSession?.(sessionId);
   const chunkSize = initData.chunk_size;
   let offset = initData.committed_offset || 0;
 
@@ -131,8 +149,13 @@ export async function runFileUploadTransfer(
       integrityOk,
     };
   } catch (err) {
-    if (!isAbortError(err)) {
-      await releaseUploadSession(agentId, sessionId);
+    if (isAbortError(err)) {
+      if (abortIntent?.mode === "cancel") {
+        await releaseUploadSession(agentId, sessionId, "user");
+        clearUploadResume(agentId, file, destinationPath);
+      }
+    } else {
+      await releaseUploadSession(agentId, sessionId, "error");
       clearUploadResume(agentId, file, destinationPath);
     }
     throw err;

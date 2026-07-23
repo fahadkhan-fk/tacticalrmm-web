@@ -13,8 +13,9 @@
           flat
           no-caps
           size="sm"
-          label="Clear all"
-          @click="emit('clear')"
+          label="Clear finished"
+          :disable="!canClearFinished"
+          @click="emit('clear-finished')"
         />
       </div>
     </div>
@@ -47,7 +48,7 @@
           <div class="upload-progress-wrap q-mt-xs">
             <q-linear-progress
               :value="item.progress"
-              color="primary"
+              :color="progressColor(item.status)"
               :track-color="$q.dark.isActive ? 'grey-8' : 'grey-4'"
               class="upload-progress"
               rounded
@@ -63,27 +64,83 @@
           >
             {{ uploadStatusLabel(item.status) }}
           </q-badge>
+          <div
+            v-if="item.status === 'uploading'"
+            class="row q-gutter-xs q-mt-xs"
+          >
+            <q-btn
+              dense
+              flat
+              no-caps
+              size="sm"
+              label="Pause"
+              @click="emit('pause', item.id)"
+            />
+            <q-btn
+              dense
+              flat
+              no-caps
+              size="sm"
+              color="negative"
+              label="Cancel"
+              @click="emit('cancel', item.id)"
+            />
+          </div>
+          <div
+            v-else-if="item.status === 'paused'"
+            class="row q-gutter-xs q-mt-xs"
+          >
+            <q-btn
+              dense
+              flat
+              no-caps
+              size="sm"
+              color="primary"
+              label="Resume"
+              @click="emit('resume', item.id)"
+            />
+            <q-btn
+              dense
+              flat
+              no-caps
+              size="sm"
+              color="negative"
+              label="Cancel"
+              @click="emit('cancel', item.id)"
+            />
+            <q-btn
+              dense
+              flat
+              no-caps
+              size="sm"
+              label="Hide"
+              @click="emit('hide', item.id)"
+            />
+          </div>
           <q-btn
-            v-if="canRemoveItem(item)"
+            v-else-if="isUploadQueueItemTerminal(item.status)"
             dense
             flat
             round
             icon="close"
             size="sm"
             class="q-mt-xs"
-            @click="emit('remove', item.id)"
-          />
+            @click="emit('dismiss', item.id)"
+          >
+            <q-tooltip>Dismiss</q-tooltip>
+          </q-btn>
           <q-btn
-            v-if="item.status === 'uploading'"
+            v-else-if="item.status === 'queued'"
             dense
             flat
             round
-            icon="stop"
+            icon="close"
             size="sm"
-            color="negative"
             class="q-mt-xs"
-            @click="emit('cancel', item.id)"
-          />
+            @click="emit('dismiss', item.id)"
+          >
+            <q-tooltip>Remove from queue</q-tooltip>
+          </q-btn>
         </q-item-section>
       </q-item>
     </q-list>
@@ -91,27 +148,43 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from "vue";
 import { useQuasar } from "quasar";
 
-import type { UploadQueueItem } from "@/types/filebrowser";
-import { uploadStatusBadgeColor, uploadStatusLabel } from "@/utils/filebrowser";
+import type { UploadQueueItem, UploadQueueStatus } from "@/types/filebrowser";
+import {
+  isUploadQueueItemTerminal,
+  uploadStatusBadgeColor,
+  uploadStatusLabel,
+} from "@/utils/filebrowser";
 
 const $q = useQuasar();
 
-defineProps<{
+const props = defineProps<{
   items: UploadQueueItem[];
   destinationLabel: string;
   limitsCaption?: string;
 }>();
 
 const emit = defineEmits<{
-  (e: "clear"): void;
-  (e: "remove", id: string): void;
+  (e: "clear-finished"): void;
+  (e: "dismiss", id: string): void;
+  (e: "pause", id: string): void;
+  (e: "resume", id: string): void;
   (e: "cancel", id: string): void;
+  (e: "hide", id: string): void;
 }>();
 
-function canRemoveItem(item: UploadQueueItem): boolean {
-  return item.status !== "uploading";
+const canClearFinished = computed(() =>
+  props.items.some((item) => isUploadQueueItemTerminal(item.status)),
+);
+
+function progressColor(status: UploadQueueStatus): string {
+  if (status === "failed") return "negative";
+  if (status === "completed") return "positive";
+  if (status === "paused") return "warning";
+  if (status === "cancelled") return "grey-7";
+  return "primary";
 }
 </script>
 
