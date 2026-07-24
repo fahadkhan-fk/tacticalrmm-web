@@ -392,6 +392,29 @@ export function listUploadNameConflicts(
   );
 }
 
+export function formatUploadConflictNamePreview(
+  names: string[],
+  maxVisible = 3,
+): { visibleNames: string[]; remainingCount: number; summaryLine: string } {
+  const cleaned = names.map((n) => n.trim()).filter(Boolean);
+  if (cleaned.length <= maxVisible) {
+    return {
+      visibleNames: cleaned,
+      remainingCount: 0,
+      summaryLine: cleaned.join(", "),
+    };
+  }
+  const visibleNames = cleaned.slice(0, maxVisible);
+  const remainingCount = cleaned.length - maxVisible;
+  return {
+    visibleNames,
+    remainingCount,
+    summaryLine: `${visibleNames.join(", ")}, and ${remainingCount} more`,
+  };
+}
+
+export type UploadConflictAction = "cancel" | "skip" | "replace";
+
 export function uploadStatusLabel(status: UploadQueueStatus): string {
   switch (status) {
     case "queued":

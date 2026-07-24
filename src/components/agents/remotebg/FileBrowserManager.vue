@@ -164,6 +164,7 @@ import FileBrowserPropertiesDialog from "@/components/agents/remotebg/FileBrowse
 import FileBrowserRenameModal from "@/components/agents/remotebg/FileBrowserRenameModal.vue";
 import FileBrowserTable from "@/components/agents/remotebg/FileBrowserTable.vue";
 import FileBrowserToolbar from "@/components/agents/remotebg/FileBrowserToolbar.vue";
+import FileBrowserUploadConflictDialog from "@/components/agents/remotebg/FileBrowserUploadConflictDialog.vue";
 import FileBrowserUploadQueue from "@/components/agents/remotebg/FileBrowserUploadQueue.vue";
 import ConfirmDialog from "@/components/ui/ConfirmDialog.vue";
 import { useFileBrowser } from "@/composables/filebrowser";
@@ -226,6 +227,7 @@ import {
   mapApiItemToFileBrowserItem,
   mapApiItemsToFileBrowserItems,
   normalizeAgentListPath,
+  type UploadConflictAction,
 } from "@/utils/filebrowser";
 import {
   notifyError,
@@ -1440,29 +1442,28 @@ function onFileInputChange(event: Event) {
   input.value = "";
 }
 
-function confirmUploadOverwrite(conflicts: File[]): Promise<boolean> {
-  const names = conflicts.map((f) => f.name);
-  const preview =
-    names.length <= 3 ? names.join(", ") : `${names.slice(0, 3).join(", ")}, …`;
-  const message =
-    conflicts.length === 1
-      ? `"${names[0]}" already exists in this folder. Replace it?`
-      : `${conflicts.length} files already exist in this folder (${preview}). Replace them?`;
-
+function confirmUploadOverwrite(
+  conflicts: File[],
+): Promise<UploadConflictAction> {
   return new Promise((resolve) => {
+    let settled = false;
+    const finish = (action: UploadConflictAction) => {
+      if (settled) return;
+      settled = true;
+      resolve(action);
+    };
+
     $q.dialog({
-      title:
-        conflicts.length === 1
-          ? "Replace existing file?"
-          : "Replace existing files?",
-      message,
-      cancel: true,
-      persistent: true,
-      ok: { label: "Replace", color: "primary" },
-      cancel: { label: "Skip", flat: true, color: "primary" },
+      component: FileBrowserUploadConflictDialog,
+      componentProps: {
+        conflictNames: conflicts.map((f) => f.name),
+      },
     })
-      .onOk(() => resolve(true))
-      .onCancel(() => resolve(false));
+      .onOk((action: UploadConflictAction) => {
+        finish(action === "replace" || action === "skip" ? action : "cancel");
+      })
+      .onCancel(() => finish("cancel"))
+      .onDismiss(() => finish("cancel"));
   });
 }
 
@@ -1526,8 +1527,12 @@ async function queueFilesForUpload(files: File[]) {
     agentPlatform.value,
   );
   if (conflicts.length > 0) {
-    const replace = await confirmUploadOverwrite(conflicts);
-    if (!replace) {
+    const action = await confirmUploadOverwrite(conflicts);
+    if (action === "cancel") {
+      notifyInfo("Upload cancelled.");
+      return;
+    }
+    if (action === "skip") {
       const conflictSet = new Set(conflicts);
       toEnqueue = toEnqueue.filter((f) => !conflictSet.has(f));
       if (!toEnqueue.length) {
