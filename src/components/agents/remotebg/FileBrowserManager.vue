@@ -287,6 +287,7 @@ const uploadAbortControllers = new Map<string, AbortController>();
 const uploadAbortIntents = new Map<string, TransferAbortIntent>();
 let uploadProcessorRunning = false;
 let uploadIdSeq = 0;
+let uploadNotifyBatchIds: Set<string> | null = null;
 
 const downloadQueue = ref<DownloadQueueItem[]>([]);
 const downloadQueueSummary = ref<string | null>(null);
@@ -923,6 +924,39 @@ function notifyDownloadBatchSummary(
   notifyWarning(`Downloads finished: ${parts.join(", ")}.`);
 }
 
+function isUploadMultiBatchNotify(): boolean {
+  return (uploadNotifyBatchIds?.size ?? 0) >= 2;
+}
+
+function notifyUploadBatchSummary(
+  succeeded: number,
+  failed: number,
+  paused: number,
+  cancelled: number,
+) {
+  const total = succeeded + failed + paused + cancelled;
+  if (total === 0) return;
+
+  if (failed === 0 && paused === 0 && cancelled === 0) {
+    notifySuccess(`${succeeded} files uploaded successfully`);
+    return;
+  }
+
+  if (succeeded === 0 && failed > 0 && paused === 0 && cancelled === 0) {
+    notifyError(
+      failed === 1 ? "Upload failed." : `All ${failed} uploads failed.`,
+    );
+    return;
+  }
+
+  const parts: string[] = [];
+  if (succeeded > 0) parts.push(`${succeeded} uploaded`);
+  if (failed > 0) parts.push(`${failed} failed`);
+  if (paused > 0) parts.push(`${paused} paused`);
+  if (cancelled > 0) parts.push(`${cancelled} cancelled`);
+  notifyWarning(`Uploads finished: ${parts.join(", ")}.`);
+}
+
 function enqueueDownloads(files: FileBrowserItem[], singleFile = false) {
   if (!files.length) return;
 
@@ -1051,11 +1085,7 @@ async function runSingleDownload(itemId: string): Promise<void> {
     }
 
     if (downloadBatchIsSingle.value && downloadQueue.value.length === 1) {
-      notifySuccess(
-        result.integrityOk
-          ? `Downloaded "${result.fileName}" (${bytes2Human(result.bytesWritten)}). Integrity verified.`
-          : `Downloaded "${result.fileName}" (${bytes2Human(result.bytesWritten)}).`,
-      );
+      notifySuccess(`Downloaded "${result.fileName}"`);
       scheduleSingleDownloadAutoDismiss(itemId);
     }
   } catch (err: unknown) {
@@ -1079,7 +1109,12 @@ async function runSingleDownload(itemId: string): Promise<void> {
 
     current.status = "failed";
     current.hidden = false;
-    current.errorMessage = getFileBrowserErrorMessage(err, "Download failed.");
+    const integrityFailed =
+      err instanceof Error &&
+      /integrity check failed|sha-256 mismatch/i.test(err.message);
+    current.errorMessage = integrityFailed
+      ? "Download failed: file integrity check did not match."
+      : getFileBrowserErrorMessage(err, "Download failed.");
     if (downloadBatchIsSingle.value && downloadQueue.value.length === 1) {
       notifyError(current.errorMessage);
     }
@@ -1605,6 +1640,7 @@ async function runSingleUpload(itemId: string): Promise<void> {
   const abortIntent: TransferAbortIntent = { mode: "pause" };
   uploadAbortControllers.set(itemId, controller);
   uploadAbortIntents.set(itemId, abortIntent);
+  const multiBatch = isUploadMultiBatchNotify();
 
   try {
     const result = await runFileUploadTransfer(
@@ -1628,15 +1664,25 @@ async function runSingleUpload(itemId: string): Promise<void> {
     const current = findUploadItem(itemId);
     if (!current) return;
 
+    if (!result.integrityOk) {
+      current.status = "failed";
+      current.hidden = false;
+      current.sessionId = undefined;
+      current.errorMessage =
+        "Upload failed: file integrity check did not match.";
+      if (!multiBatch) {
+        notifyError(current.errorMessage);
+      }
+      return;
+    }
+
     current.status = "completed";
     current.progress = 1;
     current.hidden = false;
     current.sessionId = undefined;
-    notifySuccess(
-      result.integrityOk
-        ? `Uploaded "${item.name}" to ${result.destinationPath}. Integrity verified.`
-        : `Uploaded "${item.name}" to ${result.destinationPath}.`,
-    );
+    if (!multiBatch) {
+      notifySuccess(`Uploaded "${item.name}"`);
+    }
     await refresh();
   } catch (err: unknown) {
     const current = findUploadItem(itemId);
@@ -1649,14 +1695,23 @@ async function runSingleUpload(itemId: string): Promise<void> {
       if (mode === "cancel") {
         current.sessionId = undefined;
       }
-      notifyInfo(mode === "cancel" ? "Upload cancelled." : "Upload paused.");
+      if (!multiBatch) {
+        notifyInfo(mode === "cancel" ? "Upload cancelled." : "Upload paused.");
+      }
       return;
     }
 
     current.status = "failed";
     current.hidden = false;
-    current.errorMessage = getFileBrowserErrorMessage(err, "Upload failed.");
-    notifyError(`"${item.name}": ${current.errorMessage}`);
+    const integrityFailed =
+      err instanceof Error &&
+      /integrity check failed|sha-256 mismatch/i.test(err.message);
+    current.errorMessage = integrityFailed
+      ? "Upload failed: file integrity check did not match."
+      : getFileBrowserErrorMessage(err, "Upload failed.");
+    if (!multiBatch) {
+      notifyError(`"${item.name}": ${current.errorMessage}`);
+    }
   } finally {
     uploadAbortControllers.delete(itemId);
     uploadAbortIntents.delete(itemId);
@@ -1667,6 +1722,16 @@ async function processUploadQueue(): Promise<void> {
   if (uploadProcessorRunning) return;
   uploadProcessorRunning = true;
 
+  const batchIdSet = new Set(
+    uploadQueue.value
+      .filter(
+        (item) =>
+          item.status === "queued" || isUploadQueueItemActive(item.status),
+      )
+      .map((item) => item.id),
+  );
+  uploadNotifyBatchIds = batchIdSet;
+
   try {
     while (true) {
       const next = uploadQueue.value.find((i) => i.status === "queued");
@@ -1675,6 +1740,27 @@ async function processUploadQueue(): Promise<void> {
     }
   } finally {
     uploadProcessorRunning = false;
+    uploadNotifyBatchIds = null;
+
+    if (batchIdSet.size >= 2) {
+      const batchItems = uploadQueue.value.filter((item) =>
+        batchIdSet.has(item.id),
+      );
+      const succeeded = batchItems.filter(
+        (item) => item.status === "completed",
+      ).length;
+      const failed = batchItems.filter(
+        (item) => item.status === "failed",
+      ).length;
+      const paused = batchItems.filter(
+        (item) => item.status === "paused",
+      ).length;
+      const cancelled = batchItems.filter(
+        (item) => item.status === "cancelled",
+      ).length;
+      notifyUploadBatchSummary(succeeded, failed, paused, cancelled);
+    }
+
     if (uploadQueue.value.some((i) => i.status === "queued")) {
       void processUploadQueue();
     }
