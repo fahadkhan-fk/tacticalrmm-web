@@ -36,6 +36,7 @@ export interface FileBrowserItem {
   size?: string;
   sizeBytes?: number;
   modified?: string;
+  modifiedAt?: number;
   created?: string;
   accessed?: string;
   hidden?: boolean;

@@ -17,6 +17,7 @@
       :columns="columns"
       :loading="loading"
       v-model:pagination="tablePagination"
+      :sort-method="sortFileBrowserRows"
       binary-state-sort
       :rows-per-page-options="[0]"
       selection="multiple"
@@ -176,6 +177,7 @@ import { computed, ref, useModel } from "vue";
 import { useQuasar } from "quasar";
 
 import { fileBrowserTableColumns } from "@/utils/filebrowserColumns";
+import { sortFileBrowserRows } from "@/utils/filebrowser";
 import type { FileBrowserItem } from "@/types/filebrowser";
 
 const $q = useQuasar();
@@ -321,6 +323,18 @@ const tablePagination = ref({
 .file-table-wrap--dark :deep(.file-browser-table thead tr th) {
   border-bottom: 1px solid rgba(255, 255, 255, 0.16) !important;
   color: rgba(255, 255, 255, 0.7);
+}
+
+.file-table-wrap :deep(th.sortable .q-table__sort-icon) {
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.file-table-wrap :deep(th.sortable:hover .q-table__sort-icon) {
+  opacity: 0.45;
+}
+.file-table-wrap :deep(th.sorted .q-table__sort-icon),
+.file-table-wrap :deep(th.sorted:hover .q-table__sort-icon) {
+  opacity: 1;
 }
 
 .file-table-wrap--dark :deep(.file-browser-table .q-table__bottom) {

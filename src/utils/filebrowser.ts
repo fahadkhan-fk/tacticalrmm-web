@@ -32,7 +32,10 @@ export function compareNameAsc(
   rowA: FileBrowserItem,
   rowB: FileBrowserItem,
 ): number {
-  return rowA.name.localeCompare(rowB.name, undefined, { sensitivity: "base" });
+  return rowA.name.localeCompare(rowB.name, undefined, {
+    numeric: true,
+    sensitivity: "base",
+  });
 }
 
 export function typeSortLabel(row: FileBrowserItem): string {
@@ -44,6 +47,21 @@ export function parseModifiedToTimestamp(modified?: string): number {
   if (!modified) return 0;
   const t = new Date(modified).getTime();
   return Number.isNaN(t) ? 0 : t;
+}
+
+export function modifiedSortValue(row: FileBrowserItem): number {
+  if (typeof row.modifiedAt === "number" && Number.isFinite(row.modifiedAt)) {
+    return row.modifiedAt;
+  }
+  return parseModifiedToTimestamp(row.modified);
+}
+
+export function sizeSortValue(row: FileBrowserItem): number | null {
+  if (isFolderRow(row)) return null;
+  if (typeof row.sizeBytes === "number" && Number.isFinite(row.sizeBytes)) {
+    return row.sizeBytes;
+  }
+  return parseSizeLabelToBytes(row.size);
 }
 
 export function parseSizeLabelToBytes(size?: string): number {
@@ -111,6 +129,12 @@ export function formatFileBrowserTimestamp(iso?: string): string {
   return formatDate(iso, "YYYY-MM-DD h:mm A");
 }
 
+function parseApiTimestampMs(iso?: string): number | undefined {
+  if (!iso) return undefined;
+  const t = new Date(iso).getTime();
+  return Number.isNaN(t) ? undefined : t;
+}
+
 export function mapApiItemToFileBrowserItem(
   raw: FileBrowserApiItem,
   platform?: string,
@@ -118,6 +142,7 @@ export function mapApiItemToFileBrowserItem(
   const normalizedPath = normalizeAgentListPath(raw.path, platform);
   const bytes = parseInt(raw.size, 10);
   const hasBytes = Number.isFinite(bytes) && bytes >= 0;
+  const modifiedAt = parseApiTimestampMs(raw.modified);
 
   const item: FileBrowserItem = {
     id: normalizeAgentListPath(raw.id || raw.path, platform),
@@ -131,6 +156,10 @@ export function mapApiItemToFileBrowserItem(
     system: raw.system,
     readonly: raw.readonly,
   };
+
+  if (modifiedAt !== undefined) {
+    item.modifiedAt = modifiedAt;
+  }
 
   if (raw.extension) {
     item.extension = raw.extension;
@@ -322,6 +351,56 @@ export function makeColumnSort(
 
     return compareNameAsc(rowA, rowB);
   };
+}
+
+export function sortFileBrowserRows(
+  data: readonly FileBrowserItem[],
+  sortBy: string,
+  descending: boolean,
+): FileBrowserItem[] {
+  if (!sortBy) return data.slice();
+
+  const dir = descending ? -1 : 1;
+
+  const compareField = (
+    rowA: FileBrowserItem,
+    rowB: FileBrowserItem,
+  ): number => {
+    switch (sortBy) {
+      case "modified":
+        return modifiedSortValue(rowA) - modifiedSortValue(rowB);
+      case "type":
+        return typeSortLabel(rowA).localeCompare(
+          typeSortLabel(rowB),
+          undefined,
+          {
+            sensitivity: "base",
+          },
+        );
+      case "size": {
+        const a = sizeSortValue(rowA);
+        const b = sizeSortValue(rowB);
+        if (a === null && b === null) return 0;
+        if (a === null) return 0;
+        if (b === null) return 0;
+        return a - b;
+      }
+      case "name":
+      default:
+        return compareNameAsc(rowA, rowB);
+    }
+  };
+
+  return data.slice().sort((rowA, rowB) => {
+    const folderCmp = compareFolderFirst(rowA, rowB);
+    if (folderCmp !== 0) return folderCmp;
+
+    const fieldCmp = compareField(rowA, rowB);
+    if (fieldCmp !== 0) return fieldCmp * dir;
+
+    const nameCmp = compareNameAsc(rowA, rowB);
+    return nameCmp === 0 ? 0 : nameCmp * dir;
+  });
 }
 
 export function extensionFromFileName(fileName: string): string | undefined {
