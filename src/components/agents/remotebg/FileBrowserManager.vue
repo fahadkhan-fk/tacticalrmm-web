@@ -1,6 +1,6 @@
 <template>
   <div
-    class="file-browser column q-pa-sm"
+    class="file-browser column no-wrap q-pa-sm"
     :class="{ 'file-browser--dark': $q.dark.isActive }"
     @dragenter.prevent="onDragEnter"
     @dragover.prevent="onDragOver"
@@ -1805,8 +1805,14 @@ function onDrop(event: DragEvent) {
 }
 
 .file-browser {
-  height: calc(100vh - 80px);
+  height: calc(100vh - 36px);
+  max-height: calc(100vh - 36px);
   overflow: hidden;
   gap: 12px;
+  box-sizing: border-box;
+}
+
+.file-browser > :not(.file-table-wrap) {
+  flex: 0 0 auto;
 }
 </style>

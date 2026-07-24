@@ -8,7 +8,7 @@
       dense
       virtual-scroll
       row-key="id"
-      class="remote-bg-tbl-sticky file-browser-table file-browser-table--fill"
+      class="file-browser-table file-browser-table--fill"
       :table-class="{
         'table-bgcolor': !$q.dark.isActive,
         'table-bgcolor-dark': $q.dark.isActive,
@@ -221,28 +221,39 @@ const tablePagination = ref({
 .file-table-wrap {
   display: flex;
   flex-direction: column;
-  flex: 1 1 auto;
-  min-height: 0;
-  height: 0;
+  flex: 1 1 0% !important;
+  min-height: 0 !important;
+  height: 0 !important;
+  max-height: none !important;
   overflow: hidden;
+  align-self: stretch;
+  width: 100%;
 }
 
 .file-table-wrap :deep(.file-browser-table--fill) {
   flex: 1 1 auto;
   min-height: 0;
   height: 100% !important;
-  max-height: 100% !important;
+  max-height: none !important;
   display: flex;
   flex-direction: column;
+}
+
+.file-table-wrap :deep(.file-browser-table--fill .q-table__top),
+.file-table-wrap :deep(.file-browser-table--fill .q-table__bottom) {
+  flex: 0 0 auto;
 }
 
 .file-table-wrap :deep(.file-browser-table--fill .q-table__middle) {
   flex: 1 1 auto;
   min-height: 0;
+  overflow: auto;
 }
 
-.file-table-wrap :deep(.file-browser-table--fill .q-table__bottom) {
-  flex: 0 0 auto;
+.file-table-wrap :deep(.file-browser-table--fill thead tr th) {
+  position: sticky;
+  top: 0;
+  z-index: 1;
 }
 
 .file-table-wrap :deep(.hidden-no-data-slot) {
