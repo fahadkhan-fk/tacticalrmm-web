@@ -24,6 +24,7 @@ export interface RunFileUploadOptions {
   signal?: AbortSignal;
   abortIntent?: TransferAbortIntent;
   chunkSize?: number;
+  conflictPolicy?: "skip" | "replace";
   onProgress?: (progress: FileTransferProgress) => void;
   onSession?: (sessionId: string) => void;
   knownSessionId?: string;
@@ -82,6 +83,7 @@ export async function runFileUploadTransfer(
       destination_path: destinationPath,
       total_size: totalSize,
       chunk_size: options.chunkSize ?? FILE_TRANSFER_DEFAULT_CHUNK_SIZE,
+      conflict_policy: options.conflictPolicy ?? "replace",
     });
     saveUploadResume(agentId, file, destinationPath, initData.session_id);
   }

@@ -1526,6 +1526,7 @@ async function queueFilesForUpload(files: File[]) {
     rows.value,
     agentPlatform.value,
   );
+  let conflictPolicy: "skip" | "replace" = "replace";
   if (conflicts.length > 0) {
     const action = await confirmUploadOverwrite(conflicts);
     if (action === "cancel") {
@@ -1533,6 +1534,7 @@ async function queueFilesForUpload(files: File[]) {
       return;
     }
     if (action === "skip") {
+      conflictPolicy = "skip";
       const conflictSet = new Set(conflicts);
       toEnqueue = toEnqueue.filter((f) => !conflictSet.has(f));
       if (!toEnqueue.length) {
@@ -1542,6 +1544,8 @@ async function queueFilesForUpload(files: File[]) {
       notifyInfo(
         "Skipped files that already exist. Uploading the remaining items.",
       );
+    } else {
+      conflictPolicy = "replace";
     }
   }
 
@@ -1561,6 +1565,7 @@ async function queueFilesForUpload(files: File[]) {
       destinationPath,
       status: "queued",
       progress: 0,
+      conflictPolicy,
     };
     uploadQueue.value.push(item);
   }
@@ -1610,6 +1615,7 @@ async function runSingleUpload(itemId: string): Promise<void> {
         signal: controller.signal,
         abortIntent,
         chunkSize: FILE_TRANSFER_DEFAULT_CHUNK_SIZE,
+        conflictPolicy: item.conflictPolicy ?? "replace",
         knownSessionId: item.sessionId,
         onSession: (sessionId: string) => {
           const current = findUploadItem(itemId);

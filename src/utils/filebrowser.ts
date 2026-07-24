@@ -222,6 +222,11 @@ export function formatFileBrowserApiErrorMessage(raw: string): string {
   if (!afterFailed) return afterFailed;
 
   if (
+    /destination already exists \(conflict_policy=skip\)/i.test(afterFailed)
+  ) {
+    return "Skipped — file already exists.";
+  }
+  if (
     /this destination already contains a (file|folder) named/i.test(afterFailed)
   ) {
     return ensureSentence(afterFailed);

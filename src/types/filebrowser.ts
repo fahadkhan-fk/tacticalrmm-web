@@ -113,6 +113,7 @@ export interface UploadQueueItem {
   destinationPath: string;
   status: UploadQueueStatus;
   progress: number;
+  conflictPolicy?: "skip" | "replace";
   acceptedOffset?: number;
   committedOffset?: number;
   errorMessage?: string;

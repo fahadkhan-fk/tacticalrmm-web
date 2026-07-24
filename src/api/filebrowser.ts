@@ -24,6 +24,7 @@ export interface InitFileUploadPayload {
   destination_path: string;
   total_size: number;
   chunk_size?: number;
+  conflict_policy?: "skip" | "replace";
 }
 
 export interface ResumeFileUploadPayload {
