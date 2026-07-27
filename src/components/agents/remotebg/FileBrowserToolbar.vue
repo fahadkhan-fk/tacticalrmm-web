@@ -110,8 +110,7 @@
           {{ pausedCount }}
         </q-badge>
         <q-tooltip v-if="pausedCount > 0">
-          {{ pausedTooltip }} — paused transfers still use a session slot until
-          Cancel or expiry
+          {{ pausedTooltip }} — resume anytime, or cancel to discard
         </q-tooltip>
       </q-btn>
 

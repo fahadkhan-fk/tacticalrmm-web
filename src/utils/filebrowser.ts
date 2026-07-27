@@ -570,7 +570,7 @@ export function downloadStatusLabel(status: DownloadQueueStatus): string {
     case "queued":
       return "Queued";
     case "initializing":
-      return "Initialising…";
+      return "Initializing…";
     case "downloading":
       return "Downloading…";
     case "completing":

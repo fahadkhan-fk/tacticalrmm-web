@@ -27,8 +27,7 @@
           @click="emit('hide-all')"
         >
           <q-tooltip
-            >Hide paused transfers from this panel. Use Transfers to show them
-            again.</q-tooltip
+            >Hide paused items. Open Transfers to show them again.</q-tooltip
           >
         </q-btn>
       </div>

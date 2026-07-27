@@ -140,7 +140,7 @@ const progressColor = computed(() => {
 const statusLabel = computed(() => {
   switch (props.status) {
     case "initializing":
-      return props.buildingArchive ? "Building archive…" : "Initialising…";
+      return props.buildingArchive ? "Building archive…" : "Initializing…";
     case "downloading":
       return "Downloading…";
     case "completing":

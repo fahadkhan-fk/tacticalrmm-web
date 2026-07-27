@@ -383,16 +383,13 @@ const uploadDestinationLabel = computed(() => {
   if (!visible.length) return "";
   const first = visible[0].destinationPath;
   const allSame = visible.every((i) => i.destinationPath === first);
-  return allSame ? first : `${first} (+ other paths in queue)`;
+  return allSame ? first : "Multiple folders";
 });
 
-const uploadLimitsCaption = computed(() => {
-  const maxSizeLabel =
-    MAX_UPLOAD_FILE_SIZE_BYTES > 0
-      ? bytes2Human(MAX_UPLOAD_FILE_SIZE_BYTES)
-      : "unlimited";
-  return `Max ${maxSizeLabel} per file · up to ${MAX_UPLOAD_FILES_PER_SELECTION} files per selection · queue capacity ${MAX_UPLOAD_QUEUE_ITEMS}`;
-});
+const uploadLimitsCaption = computed(
+  () =>
+    `No file size limit · Up to ${MAX_UPLOAD_FILES_PER_SELECTION} files per selection`,
+);
 
 const filteredRows = computed(() => {
   const q = (search.value ?? "").trim().toLowerCase();
@@ -920,8 +917,8 @@ function notifyDownloadBatchSummary(
   if (paused > 0) parts.push(`${paused} paused`);
   if (cancelled > 0) parts.push(`${cancelled} cancelled`);
 
-  downloadQueueSummary.value = `Finished: ${parts.join(", ")}.`;
-  notifyWarning(`Downloads finished: ${parts.join(", ")}.`);
+  downloadQueueSummary.value = parts.join(" · ");
+  notifyWarning(`Downloads: ${parts.join(" · ")}`);
 }
 
 function isUploadMultiBatchNotify(): boolean {
