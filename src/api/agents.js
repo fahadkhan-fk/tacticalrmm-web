@@ -484,7 +484,6 @@ export async function fetchAgentFileProperties(agent_id, path, platform) {
       `${baseUrl}/${agent_id}/files/properties/`,
       {
         params: { path: normalizedPath },
-        // Folder size/contains walks on the agent (≤20s) + NATS headroom.
         timeout: 60_000,
       },
     );

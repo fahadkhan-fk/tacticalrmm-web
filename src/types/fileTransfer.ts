@@ -93,12 +93,3 @@ export type TransferAbortMode = "pause" | "cancel";
 export interface TransferAbortIntent {
   mode: TransferAbortMode;
 }
-
-export interface DownloadTransferState {
-  active: boolean;
-  fileName: string;
-  sourcePath: string;
-  progress: number;
-  status: DownloadTransferStatus;
-  errorMessage?: string;
-}

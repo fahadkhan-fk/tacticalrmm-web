@@ -263,7 +263,7 @@ async function createDownloadSink(
         try {
           await writable.close();
         } catch {
-          /* partial file kept for resume */
+          // partial file kept for resume
         }
         writable = null;
       }

@@ -6,7 +6,6 @@ export function createSha256Hasher(): Sha256Hasher {
   return sha256.create();
 }
 
-/** Feed the first `endOffset` bytes of a Blob into the hasher (resume support). */
 export async function hashBlobPrefix(
   blob: Blob,
   endOffset: number,

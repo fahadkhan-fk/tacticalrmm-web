@@ -163,7 +163,6 @@ export function parseContentRangeHeader(header: string | undefined): {
   end: number;
   total: number;
 } {
-  // bytes START-END/TOTAL
   const match = (header ?? "").match(/bytes (\d+)-(\d+)\/(\d+)/);
   if (!match) {
     throw new Error(`Invalid Content-Range header: ${header ?? "(missing)"}`);

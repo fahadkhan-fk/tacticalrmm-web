@@ -83,14 +83,6 @@
           :agent_id="agent_id"
           :agent-platform="String($route.query.agentPlatform || 'windows')"
         />
-        <!-- <iframe
-          allow="clipboard-read; clipboard-write"
-          :src="file"
-          :style="{
-            height: `${$q.screen.height - 30}px`,
-            width: `${$q.screen.width}px`,
-          }"
-        ></iframe> -->
       </q-tab-panel>
       <q-tab-panel
         v-if="$route.query.agentPlatform === 'windows'"
@@ -145,7 +137,6 @@ export default {
 
     // meshcentral tabs
     const terminal = ref("");
-    const file = ref("");
     const tab = ref("terminal");
     const terminalMode = ref("legacy");
     const terminalDefaults = ref(null);
@@ -155,7 +146,6 @@ export default {
     async function getMeshURLs() {
       const data = await fetchAgentMeshCentralURLs(params.agent_id);
       terminal.value = data.terminal;
-      file.value = data.file;
       useMeta({
         title: `${data.hostname} - ${data.client} - ${data.site} | Remote Background`,
       });
@@ -210,7 +200,6 @@ export default {
     return {
       // reactive data
       terminal,
-      file,
       tab,
       agent_id,
       registryIcon,
