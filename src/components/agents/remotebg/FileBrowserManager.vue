@@ -512,8 +512,7 @@ async function refresh() {
   selectedRows.value = [];
   resetListPagingState();
 
-  // Only clear rows when the folder actually changes. Same-folder Refresh
-  // keeps the current list visible under a light progress bar (no blank flash).
+  // Only clear rows when the folder actually changes.
   if (pathChanged) {
     rows.value = [];
   }
@@ -555,10 +554,6 @@ async function refresh() {
   }
 }
 
-/**
- * Infinite-scroll continuation. Shares loadSeq with refresh so navigate/refresh
- * mid-fetch discards the stale page. Does not clear selection or filter.
- */
 async function loadMoreRows() {
   if (
     loading.value ||
@@ -661,17 +656,11 @@ watch(
   { flush: "post" },
 );
 
-/**
- * When the visible list is short (filter with few/no matches, or a short
- * viewport that cannot scroll), keep fetching so operators are not stuck
- * needing a scroll gesture that is impossible.
- */
 watch(
   [loadingMore, listHasMore, filteredRows, loading],
   () => {
     if (loading.value || loadingMore.value || !listHasMore.value) return;
     if (filteredRows.value.length > FILE_BROWSER_LOAD_MORE_THRESHOLD) return;
-    // Let the first page paint before chaining the next request.
     window.setTimeout(() => {
       if (loading.value || loadingMore.value || !listHasMore.value) return;
       if (filteredRows.value.length > FILE_BROWSER_LOAD_MORE_THRESHOLD) return;

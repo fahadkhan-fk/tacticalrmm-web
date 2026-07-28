@@ -4,6 +4,10 @@
     :class="{
       'file-table-wrap--dark': $q.dark.isActive,
     }"
+    :style="{
+      '--file-browser-row-height': `${FILE_BROWSER_ROW_HEIGHT_PX}px`,
+      '--file-browser-header-height': `${FILE_BROWSER_HEADER_HEIGHT_PX}px`,
+    }"
     role="region"
     :aria-label="dropRegionLabel"
     @dragenter.prevent="onDragEnter"
@@ -19,9 +23,9 @@
     />
 
     <q-table
+      ref="tableRef"
       flat
       dense
-      virtual-scroll
       row-key="id"
       class="file-browser-table file-browser-table--fill"
       :class="{
@@ -42,9 +46,6 @@
       selection="multiple"
       v-model:selected="selected"
       :no-data-label="noDataLabel"
-      :virtual-scroll-item-size="36"
-      :virtual-scroll-sticky-start="34"
-      @virtual-scroll="onVirtualScroll"
     >
       <template #no-data>
         <span class="hidden-no-data-slot" aria-hidden="true" />
@@ -259,7 +260,15 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, useModel } from "vue";
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  useModel,
+  watch,
+} from "vue";
 import { useQuasar } from "quasar";
 
 import { fileBrowserTableColumns } from "@/utils/filebrowserColumns";
@@ -275,8 +284,14 @@ import {
   truncatePathMiddle,
   type DropOverlayRejectReason,
 } from "@/utils/filebrowser";
-import { FILE_BROWSER_LOAD_MORE_THRESHOLD } from "@/constants/filebrowser";
+import {
+  FILE_BROWSER_HEADER_HEIGHT_PX,
+  FILE_BROWSER_LOAD_MORE_THRESHOLD,
+  FILE_BROWSER_ROW_HEIGHT_PX,
+} from "@/constants/filebrowser";
 import type { FileBrowserItem } from "@/types/filebrowser";
+
+type FileBrowserTableRoot = HTMLElement | { $el?: HTMLElement };
 
 const $q = useQuasar();
 
@@ -293,13 +308,9 @@ const props = withDefaults(
     maxFilesPerSelection?: number;
     maxFileSizeBytes?: number;
     filterQuery?: string;
-    /** Number of items loaded so far (unfiltered). */
     folderItemCount?: number;
-    /** Agent-reported folder total when known. */
     listTotal?: number | null;
-    /** More pages available from the agent. */
     hasMore?: boolean;
-    /** Next page fetch in flight (scroll load). */
     loadingMore?: boolean;
   }>(),
   {
@@ -379,6 +390,17 @@ const selected = useModel(props, "selected");
 
 const columns = fileBrowserTableColumns;
 
+const tableRef = ref<FileBrowserTableRoot | null>(null);
+let tableScrollEl: HTMLElement | null = null;
+
+function getTableRootEl(): HTMLElement | null {
+  const inst = tableRef.value;
+  if (!inst) return null;
+  if (inst instanceof HTMLElement) return inst;
+  const el = inst.$el;
+  return el instanceof HTMLElement ? el : null;
+}
+
 const tablePagination = ref({
   page: 1,
   rowsPerPage: 0,
@@ -386,22 +408,45 @@ const tablePagination = ref({
   descending: false,
 });
 
-function onVirtualScroll(details: {
-  index: number;
-  from: number;
-  to: number;
-  direction: "increase" | "decrease";
-}) {
+function onTableMiddleScroll() {
   if (!props.hasMore || props.loading || props.loadingMore) return;
-  if (details.direction === "decrease") return;
+  const el = tableScrollEl;
+  if (!el) return;
 
-  const last = props.rows.length - 1;
-  if (last < 0) return;
-
-  if (details.to >= last - FILE_BROWSER_LOAD_MORE_THRESHOLD) {
+  const thresholdPx =
+    FILE_BROWSER_ROW_HEIGHT_PX * FILE_BROWSER_LOAD_MORE_THRESHOLD;
+  const remaining = el.scrollHeight - el.scrollTop - el.clientHeight;
+  if (remaining <= thresholdPx) {
     emit("load-more");
   }
 }
+
+function bindTableScroll() {
+  unbindTableScroll();
+  const root = getTableRootEl();
+  if (!root) return;
+  const middle = root.querySelector(".q-table__middle") as HTMLElement | null;
+  if (!middle) return;
+  tableScrollEl = middle;
+  middle.addEventListener("scroll", onTableMiddleScroll, { passive: true });
+}
+
+function unbindTableScroll() {
+  if (tableScrollEl) {
+    tableScrollEl.removeEventListener("scroll", onTableMiddleScroll);
+    tableScrollEl = null;
+  }
+}
+
+watch(
+  () => props.rows.length,
+  () => {
+    void nextTick(() => {
+      bindTableScroll();
+      onTableMiddleScroll();
+    });
+  },
+);
 
 const dragCounter = ref(0);
 const isFileDragSession = ref(false);
@@ -544,11 +589,15 @@ function onDrop(e: DragEvent) {
 onMounted(() => {
   window.addEventListener("dragend", resetDragState);
   window.addEventListener("blur", resetDragState);
+  void nextTick(() => {
+    bindTableScroll();
+  });
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener("dragend", resetDragState);
   window.removeEventListener("blur", resetDragState);
+  unbindTableScroll();
   resetDragState();
 });
 </script>
@@ -566,7 +615,6 @@ onBeforeUnmount(() => {
   width: 100%;
 }
 
-/* Full-width pulse/glow — activity only, not left→right progress. */
 .file-table-progress {
   position: absolute;
   top: 0;
@@ -645,7 +693,6 @@ onBeforeUnmount(() => {
   overflow: auto;
 }
 
-/* Fixed column model: Name flexes; Date / Type / Size stay put across folders. */
 .file-table-wrap :deep(.file-browser-table table) {
   table-layout: fixed;
   width: 100%;
@@ -662,7 +709,6 @@ onBeforeUnmount(() => {
   vertical-align: middle;
 }
 
-/* Same checkbox geometry in header + body (Quasar dense hit-area can look offset). */
 .file-table-wrap :deep(.file-browser-table th:first-child .q-checkbox),
 .file-table-wrap :deep(.file-browser-table td.file-col-select .q-checkbox) {
   margin: 0 auto;
@@ -688,7 +734,7 @@ onBeforeUnmount(() => {
   position: absolute;
   left: 0;
   right: 0;
-  top: 34px;
+  top: var(--file-browser-header-height);
   bottom: 32px;
   display: flex;
   flex-direction: column;
@@ -756,11 +802,18 @@ onBeforeUnmount(() => {
 }
 
 .file-table-wrap :deep(.file-browser-table tbody td) {
-  height: auto;
-  min-height: 32px;
-  padding-top: 5px;
-  padding-bottom: 5px;
+  height: var(--file-browser-row-height);
+  min-height: var(--file-browser-row-height);
+  max-height: var(--file-browser-row-height);
+  box-sizing: border-box;
+  padding-top: 0;
+  padding-bottom: 0;
+  vertical-align: middle;
   border-bottom: 1px solid rgba(0, 0, 0, 0.14) !important;
+}
+
+.file-table-wrap :deep(.file-browser-table tbody tr.file-table-row) {
+  height: var(--file-browser-row-height);
 }
 
 .file-table-wrap--dark :deep(.file-browser-table tbody td) {
@@ -769,10 +822,13 @@ onBeforeUnmount(() => {
 }
 
 .file-table-wrap :deep(.file-browser-table thead tr th) {
-  height: auto;
-  min-height: 34px;
-  padding-top: 6px;
-  padding-bottom: 6px;
+  height: var(--file-browser-header-height);
+  min-height: var(--file-browser-header-height);
+  max-height: var(--file-browser-header-height);
+  box-sizing: border-box;
+  padding-top: 0;
+  padding-bottom: 0;
+  vertical-align: middle;
   border-bottom: 1px solid rgba(0, 0, 0, 0.16) !important;
 }
 
@@ -830,7 +886,7 @@ onBeforeUnmount(() => {
   position: absolute;
   left: 0;
   right: 0;
-  top: 34px;
+  top: var(--file-browser-header-height);
   bottom: 32px;
   z-index: 10;
   pointer-events: none;
