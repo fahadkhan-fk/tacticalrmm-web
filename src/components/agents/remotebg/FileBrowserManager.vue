@@ -2,10 +2,8 @@
   <div
     class="file-browser column no-wrap q-pa-sm"
     :class="{ 'file-browser--dark': $q.dark.isActive }"
-    @dragenter.prevent="onDragEnter"
-    @dragover.prevent="onDragOver"
-    @dragleave.prevent="onDragLeave"
-    @drop.prevent="onDrop"
+    @dragover="onBrowserDragOver"
+    @drop="onBrowserDrop"
   >
     <FileBrowserPathBar
       :current-path="currentPath"
@@ -95,8 +93,11 @@
       :loading="loading || mutationSaving"
       :no-data-label="tableNoDataLabel"
       :empty-is-error="!!listError"
-      :show-drop-overlay="isDragging && hasUploadPath"
+      :drop-enabled="hasUploadPath"
       :current-path="currentPath"
+      :queue-room="uploadQueueRoom"
+      :max-files-per-selection="MAX_UPLOAD_FILES_PER_SELECTION"
+      :max-file-size-bytes="MAX_UPLOAD_FILE_SIZE_BYTES"
       @row-dblclick="onRowDoubleClick"
       @open-folder="openFolder"
       @download="downloadFromContext"
@@ -104,6 +105,8 @@
       @delete="openDeleteDialogFromContext"
       @properties="showProperties"
       @copy-path="copyPathFromContext"
+      @files-dropped="onFilesDropped"
+      @drop-rejected="onDropRejected"
     />
 
     <FileBrowserPropertiesDialog
@@ -210,13 +213,13 @@ import type {
 import { bytes2Human } from "@/utils/format";
 import {
   defaultFileBrowserRootPath,
+  dropRejectToastMessage,
   fileListToArray,
   classifyDownloadSelection,
   deriveArchiveDownloadName,
   getFileBrowserErrorMessage,
   isDuplicateNameError,
   getListFilesErrorMessage,
-  isFileDrag,
   isListFilesAgentOfflineError,
   isListFilesPermissionError,
   isDownloadQueueItemActive,
@@ -227,6 +230,7 @@ import {
   mapApiItemToFileBrowserItem,
   mapApiItemsToFileBrowserItems,
   normalizeAgentListPath,
+  type DropOverlayRejectReason,
   type UploadConflictAction,
 } from "@/utils/filebrowser";
 import {
@@ -256,9 +260,6 @@ const listError = ref<string | null>(null);
 const currentPath = ref("");
 const search = ref("");
 const selectedRows = ref<FileBrowserItem[]>([]);
-const isDragging = ref(false);
-const dragCounter = ref(0);
-const isFileDragSession = ref(false);
 
 const history = ref<string[]>([]);
 const historyIndex = ref(0);
@@ -306,6 +307,10 @@ const visibleUploadQueueItems = computed(() =>
 );
 
 const hasUploadPath = computed(() => currentPath.value.trim().length > 0);
+
+const uploadQueueRoom = computed(
+  () => MAX_UPLOAD_QUEUE_ITEMS - uploadQueue.value.length,
+);
 
 const singleDownloadEntry = computed(() => {
   if (!downloadBatchIsSingle.value || downloadQueue.value.length !== 1) {
@@ -1499,12 +1504,28 @@ function confirmUploadOverwrite(
   });
 }
 
-async function queueFilesForUpload(files: File[]) {
+async function queueFilesForUpload(
+  files: File[],
+  options?: { folderCount?: number },
+) {
   if (!assertUploadPath()) return;
-  if (!files.length) return;
+  if (!files.length) {
+    if ((options?.folderCount ?? 0) > 0) {
+      notifyWarning(
+        "Folders cannot be uploaded. Drop files into this folder instead.",
+      );
+    }
+    return;
+  }
 
   let batch = files;
   const notes: string[] = [];
+
+  if ((options?.folderCount ?? 0) > 0) {
+    notes.push(
+      `${options!.folderCount} folder(s) skipped — folder upload is not supported.`,
+    );
+  }
 
   if (batch.length > MAX_UPLOAD_FILES_PER_SELECTION) {
     notes.push(
@@ -1516,7 +1537,7 @@ async function queueFilesForUpload(files: File[]) {
   const room = MAX_UPLOAD_QUEUE_ITEMS - uploadQueue.value.length;
   if (room <= 0) {
     notifyWarning(
-      `The upload queue is full (max ${MAX_UPLOAD_QUEUE_ITEMS} items). Remove some or clear the queue.`,
+      `Upload queue is full (max ${MAX_UPLOAD_QUEUE_ITEMS} items). Clear finished items or cancel transfers, then try again.`,
     );
     return;
   }
@@ -1846,46 +1867,39 @@ function clearFinishedUploads() {
   );
 }
 
-function syncFileDropOverlay() {
-  isDragging.value = dragCounter.value > 0 && isFileDragSession.value;
+function onBrowserDragOver(e: DragEvent) {
+  const target = e.target as Element | null;
+  if (target?.closest?.(".file-table-wrap")) return;
+  if (!isFileDragEvent(e)) return;
+  e.preventDefault();
+  if (e.dataTransfer) e.dataTransfer.dropEffect = "none";
 }
 
-function onDragEnter(e: DragEvent) {
-  dragCounter.value += 1;
-  if (isFileDrag(e.dataTransfer)) {
-    isFileDragSession.value = true;
+function onBrowserDrop(e: DragEvent) {
+  const target = e.target as Element | null;
+  if (target?.closest?.(".file-table-wrap")) return;
+  if (!isFileDragEvent(e)) return;
+  e.preventDefault();
+}
+
+function isFileDragEvent(e: DragEvent): boolean {
+  const types = e.dataTransfer?.types;
+  if (!types) return false;
+  for (let i = 0; i < types.length; i++) {
+    if (types[i] === "Files") return true;
   }
-  syncFileDropOverlay();
+  return false;
 }
 
-function onDragOver(e: DragEvent) {
-  if (isFileDrag(e.dataTransfer)) {
-    isFileDragSession.value = true;
-  }
-  syncFileDropOverlay();
+function onFilesDropped(payload: { files: File[]; folderCount: number }) {
+  if (!payload.files.length && payload.folderCount <= 0) return;
+  void queueFilesForUpload(payload.files, {
+    folderCount: payload.folderCount,
+  });
 }
 
-function onDragLeave() {
-  dragCounter.value -= 1;
-
-  if (dragCounter.value <= 0) {
-    dragCounter.value = 0;
-    isFileDragSession.value = false;
-    isDragging.value = false;
-  } else {
-    syncFileDropOverlay();
-  }
-}
-
-function onDrop(event: DragEvent) {
-  dragCounter.value = 0;
-  isFileDragSession.value = false;
-  isDragging.value = false;
-
-  const files = fileListToArray(event.dataTransfer?.files);
-  if (!files.length) return;
-
-  void queueFilesForUpload(files);
+function onDropRejected(reason: DropOverlayRejectReason) {
+  notifyWarning(dropRejectToastMessage(reason));
 }
 </script>
 

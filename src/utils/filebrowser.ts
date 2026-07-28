@@ -406,6 +406,215 @@ export function isFileDrag(
   return false;
 }
 
+type DataTransferItemWithEntry = DataTransferItem & {
+  webkitGetAsEntry?: () => FileSystemEntry | null;
+};
+
+export type FileDragInspection = {
+  isFileDrag: boolean;
+  fileCount: number;
+  folderCount: number;
+  countKnown: boolean;
+  oversizedFileCount: number;
+  sizeKnown: boolean;
+};
+
+export type DropOverlayRejectReason =
+  | "folders"
+  | "unsupported"
+  | "too-many"
+  | "queue-full"
+  | "size-limit";
+
+export function inspectFileDrag(
+  dataTransfer: DataTransfer | null | undefined,
+  maxFileSizeBytes = 0,
+): FileDragInspection {
+  const empty: FileDragInspection = {
+    isFileDrag: false,
+    fileCount: 0,
+    folderCount: 0,
+    countKnown: false,
+    oversizedFileCount: 0,
+    sizeKnown: false,
+  };
+
+  if (!isFileDrag(dataTransfer)) return empty;
+
+  const items = dataTransfer?.items;
+  if (!items?.length) {
+    return {
+      ...empty,
+      isFileDrag: true,
+      countKnown: false,
+    };
+  }
+
+  let fileCount = 0;
+  let folderCount = 0;
+  let oversizedFileCount = 0;
+  let sizedFiles = 0;
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i] as DataTransferItemWithEntry;
+    if (item.kind !== "file") continue;
+
+    const entry = item.webkitGetAsEntry?.();
+    if (entry?.isDirectory) {
+      folderCount += 1;
+      continue;
+    }
+
+    fileCount += 1;
+    const file = item.getAsFile?.();
+    if (file && maxFileSizeBytes > 0) {
+      sizedFiles += 1;
+      if (file.size > maxFileSizeBytes) oversizedFileCount += 1;
+    }
+  }
+
+  return {
+    isFileDrag: true,
+    fileCount,
+    folderCount,
+    countKnown: true,
+    oversizedFileCount,
+    sizeKnown:
+      maxFileSizeBytes > 0 && sizedFiles === fileCount && fileCount > 0,
+  };
+}
+
+export function resolveDropOverlayReject(options: {
+  inspection: FileDragInspection;
+  queueRoom: number;
+  maxFilesPerSelection: number;
+  maxFileSizeBytes: number;
+}): DropOverlayRejectReason | null {
+  const { inspection, queueRoom, maxFilesPerSelection, maxFileSizeBytes } =
+    options;
+
+  if (!inspection.isFileDrag) return "unsupported";
+
+  if (inspection.countKnown) {
+    if (inspection.fileCount === 0 && inspection.folderCount > 0) {
+      return "folders";
+    }
+    if (inspection.fileCount === 0 && inspection.folderCount === 0) {
+      return "unsupported";
+    }
+    if (queueRoom <= 0) return "queue-full";
+    if (inspection.fileCount > maxFilesPerSelection) return "too-many";
+    if (
+      maxFileSizeBytes > 0 &&
+      inspection.sizeKnown &&
+      inspection.oversizedFileCount === inspection.fileCount
+    ) {
+      return "size-limit";
+    }
+  } else if (queueRoom <= 0) {
+    return "queue-full";
+  }
+
+  return null;
+}
+
+export function formatDropOverlayTitle(
+  reason: DropOverlayRejectReason | null,
+  fileCount: number | null,
+): string {
+  switch (reason) {
+    case "folders":
+      return "Folders cannot be uploaded";
+    case "unsupported":
+      return "This item cannot be uploaded";
+    case "too-many":
+      return "Too many files selected";
+    case "queue-full":
+      return "Upload queue is full";
+    case "size-limit":
+      return "File exceeds the upload limit";
+    default:
+      break;
+  }
+
+  if (fileCount === 1) return "Drop file to upload";
+  if (fileCount != null && fileCount > 1) {
+    return `Drop ${fileCount} files to upload`;
+  }
+  return "Drop files to upload";
+}
+
+export function dropRejectToastMessage(
+  reason: DropOverlayRejectReason,
+): string {
+  switch (reason) {
+    case "folders":
+      return "Folders cannot be uploaded. Drop files into this folder instead.";
+    case "unsupported":
+      return "This item cannot be uploaded.";
+    case "too-many":
+      return "Too many files selected for one upload.";
+    case "queue-full":
+      return "Upload queue is full. Clear finished items or cancel transfers, then try again.";
+    case "size-limit":
+      return "File exceeds the upload limit.";
+  }
+}
+
+export function collectDroppedUploadFiles(
+  dataTransfer: DataTransfer | null | undefined,
+): { files: File[]; folderCount: number } {
+  const files: File[] = [];
+  let folderCount = 0;
+  const items = dataTransfer?.items;
+
+  if (items?.length) {
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i] as DataTransferItemWithEntry;
+      if (item.kind !== "file") continue;
+
+      const entry = item.webkitGetAsEntry?.();
+      if (entry?.isDirectory) {
+        folderCount += 1;
+        continue;
+      }
+
+      const file = item.getAsFile();
+      if (file) files.push(file);
+    }
+
+    if (files.length > 0 || folderCount > 0) {
+      return { files, folderCount };
+    }
+  }
+
+  return { files: fileListToArray(dataTransfer?.files), folderCount: 0 };
+}
+
+export function fileBrowserPathLeaf(path: string): string {
+  const trimmed = path.trim().replace(/[\\/]+$/, "");
+  if (!trimmed) return "this folder";
+
+  const driveOnly = /^[A-Za-z]:$/.exec(trimmed);
+  if (driveOnly) return `${driveOnly[0]}\\`;
+
+  const parts = trimmed.split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] || trimmed;
+}
+
+export function truncatePathMiddle(path: string, maxLen = 52): string {
+  const trimmed = path.trim();
+  if (trimmed.length <= maxLen) return trimmed;
+
+  const ellipsis = "...";
+  const keep = maxLen - ellipsis.length;
+  if (keep < 8) return trimmed.slice(0, maxLen);
+
+  const head = Math.ceil(keep * 0.45);
+  const tail = keep - head;
+  return `${trimmed.slice(0, head)}${ellipsis}${trimmed.slice(-tail)}`;
+}
+
 export function fileListToArray(list: FileList | null | undefined): File[] {
   if (!list?.length) return [];
   const out: File[] = [];

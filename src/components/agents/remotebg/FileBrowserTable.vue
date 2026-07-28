@@ -1,7 +1,15 @@
 <template>
   <div
     class="col relative-position file-table-wrap"
-    :class="{ 'file-table-wrap--dark': $q.dark.isActive }"
+    :class="{
+      'file-table-wrap--dark': $q.dark.isActive,
+    }"
+    role="region"
+    :aria-label="dropRegionLabel"
+    @dragenter.prevent="onDragEnter"
+    @dragover.prevent="onDragOver"
+    @dragleave.prevent="onDragLeave"
+    @drop.prevent="onDrop"
   >
     <q-table
       flat
@@ -161,36 +169,87 @@
 
     <div
       v-if="showDropOverlay"
-      class="drop-overlay column items-center justify-center"
+      class="drop-target"
+      :class="{ 'drop-target--reject': dropRejected }"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
     >
-      <q-icon name="cloud_upload" size="52px" color="primary" />
-      <div class="text-h6 q-mt-sm">Drop files to upload</div>
-      <div class="text-caption text-grey-7">
-        Files will be uploaded to {{ currentPath }}
+      <div class="drop-target__scrim" aria-hidden="true" />
+      <div class="drop-target__card">
+        <q-icon
+          class="drop-target__icon"
+          :name="dropRejected ? 'block' : 'upload'"
+          size="26px"
+          aria-hidden="true"
+        />
+        <div class="drop-target__title">{{ dropTitle }}</div>
+        <template v-if="!dropRejected">
+          <div class="drop-target__dest">
+            Uploading to
+            <span class="drop-target__leaf">{{ destinationLeaf }}</span>
+          </div>
+          <div
+            v-if="currentPath"
+            class="drop-target__path"
+            :title="currentPath"
+          >
+            {{ pathDisplay }}
+            <q-tooltip
+              v-if="pathIsTruncated"
+              anchor="top middle"
+              self="bottom middle"
+            >
+              {{ currentPath }}
+            </q-tooltip>
+          </div>
+        </template>
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, useModel } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, useModel } from "vue";
 import { useQuasar } from "quasar";
 
 import { fileBrowserTableColumns } from "@/utils/filebrowserColumns";
-import { sortFileBrowserRows } from "@/utils/filebrowser";
+import {
+  collectDroppedUploadFiles,
+  formatDropOverlayTitle,
+  fileBrowserPathLeaf,
+  inspectFileDrag,
+  isFileDrag,
+  resolveDropOverlayReject,
+  sortFileBrowserRows,
+  truncatePathMiddle,
+  type DropOverlayRejectReason,
+} from "@/utils/filebrowser";
 import type { FileBrowserItem } from "@/types/filebrowser";
 
 const $q = useQuasar();
 
-const props = defineProps<{
-  rows: FileBrowserItem[];
-  loading: boolean;
-  noDataLabel: string;
-  emptyIsError?: boolean;
-  showDropOverlay: boolean;
-  currentPath: string;
-  selected?: FileBrowserItem[];
-}>();
+const props = withDefaults(
+  defineProps<{
+    rows: FileBrowserItem[];
+    loading: boolean;
+    noDataLabel: string;
+    emptyIsError?: boolean;
+    dropEnabled?: boolean;
+    currentPath: string;
+    selected?: FileBrowserItem[];
+    queueRoom?: number;
+    maxFilesPerSelection?: number;
+    maxFileSizeBytes?: number;
+  }>(),
+  {
+    dropEnabled: false,
+    emptyIsError: false,
+    queueRoom: Number.POSITIVE_INFINITY,
+    maxFilesPerSelection: 100,
+    maxFileSizeBytes: 0,
+  },
+);
 
 const showEmptyState = computed(
   () => !props.loading && props.rows.length === 0,
@@ -205,6 +264,8 @@ const emit = defineEmits<{
   (e: "properties", row: FileBrowserItem): void;
   (e: "copy-path", row: FileBrowserItem): void;
   (e: "update:selected", value: FileBrowserItem[]): void;
+  (e: "files-dropped", payload: { files: File[]; folderCount: number }): void;
+  (e: "drop-rejected", reason: DropOverlayRejectReason): void;
 }>();
 
 const selected = useModel(props, "selected");
@@ -216,6 +277,151 @@ const tablePagination = ref({
   rowsPerPage: 0,
   sortBy: "name",
   descending: false,
+});
+
+const dragCounter = ref(0);
+const isFileDragSession = ref(false);
+const rejectReason = ref<DropOverlayRejectReason | null>(null);
+const dragFileCount = ref<number | null>(null);
+
+const PATH_DISPLAY_MAX = 52;
+
+const showDropOverlay = computed(
+  () => !!props.dropEnabled && dragCounter.value > 0 && isFileDragSession.value,
+);
+
+const dropRejected = computed(() => rejectReason.value != null);
+
+const destinationLeaf = computed(() =>
+  fileBrowserPathLeaf(props.currentPath || ""),
+);
+
+const pathDisplay = computed(() =>
+  truncatePathMiddle(props.currentPath || "", PATH_DISPLAY_MAX),
+);
+
+const pathIsTruncated = computed(
+  () => (props.currentPath || "").trim().length > PATH_DISPLAY_MAX,
+);
+
+const dropTitle = computed(() =>
+  formatDropOverlayTitle(rejectReason.value, dragFileCount.value),
+);
+
+const dropRegionLabel = computed(() => {
+  if (!props.dropEnabled) {
+    return "File list";
+  }
+  return "File list. Drop files here to upload, or use the Upload button.";
+});
+
+function resetDragState() {
+  dragCounter.value = 0;
+  isFileDragSession.value = false;
+  rejectReason.value = null;
+  dragFileCount.value = null;
+}
+
+function syncDropState(dataTransfer?: DataTransfer | null) {
+  if (!props.dropEnabled) {
+    isFileDragSession.value = false;
+    rejectReason.value = null;
+    dragFileCount.value = null;
+    return;
+  }
+
+  if (!isFileDrag(dataTransfer)) {
+    return;
+  }
+
+  isFileDragSession.value = true;
+
+  const inspection = inspectFileDrag(dataTransfer, props.maxFileSizeBytes);
+
+  dragFileCount.value = inspection.countKnown ? inspection.fileCount : null;
+
+  rejectReason.value = resolveDropOverlayReject({
+    inspection,
+    queueRoom: props.queueRoom,
+    maxFilesPerSelection: props.maxFilesPerSelection,
+    maxFileSizeBytes: props.maxFileSizeBytes,
+  });
+}
+
+function applyDropEffect(dataTransfer: DataTransfer | null | undefined) {
+  if (!dataTransfer || !props.dropEnabled || !isFileDrag(dataTransfer)) return;
+  dataTransfer.dropEffect = rejectReason.value ? "none" : "copy";
+}
+
+function onDragEnter(e: DragEvent) {
+  dragCounter.value += 1;
+  syncDropState(e.dataTransfer);
+  applyDropEffect(e.dataTransfer);
+}
+
+function onDragOver(e: DragEvent) {
+  syncDropState(e.dataTransfer);
+  applyDropEffect(e.dataTransfer);
+}
+
+function onDragLeave() {
+  dragCounter.value -= 1;
+  if (dragCounter.value <= 0) {
+    resetDragState();
+  }
+}
+
+function onDrop(e: DragEvent) {
+  const reasonAtDrop = rejectReason.value;
+  const wasFileDrag = isFileDragSession.value;
+  resetDragState();
+
+  if (!props.dropEnabled || !wasFileDrag) return;
+
+  const { files, folderCount } = collectDroppedUploadFiles(e.dataTransfer);
+  const inspection = inspectFileDrag(e.dataTransfer, props.maxFileSizeBytes);
+  if (files.length > 0 || folderCount > 0) {
+    inspection.fileCount = files.length;
+    inspection.folderCount = folderCount;
+    inspection.countKnown = true;
+    if (props.maxFileSizeBytes > 0 && files.length > 0) {
+      inspection.oversizedFileCount = files.filter(
+        (f) => f.size > props.maxFileSizeBytes,
+      ).length;
+      inspection.sizeKnown = true;
+    }
+  }
+
+  const reason =
+    resolveDropOverlayReject({
+      inspection,
+      queueRoom: props.queueRoom,
+      maxFilesPerSelection: props.maxFilesPerSelection,
+      maxFileSizeBytes: props.maxFileSizeBytes,
+    }) ?? reasonAtDrop;
+
+  if (reason) {
+    emit("drop-rejected", reason);
+    return;
+  }
+
+  if (!files.length) {
+    emit("drop-rejected", folderCount > 0 ? "folders" : "unsupported");
+    return;
+  }
+
+  emit("files-dropped", { files, folderCount });
+}
+
+onMounted(() => {
+  window.addEventListener("dragend", resetDragState);
+  window.addEventListener("blur", resetDragState);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener("dragend", resetDragState);
+  window.removeEventListener("blur", resetDragState);
+  resetDragState();
 });
 </script>
 
@@ -337,6 +543,12 @@ const tablePagination = ref({
   opacity: 1;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .file-table-wrap :deep(th.sortable .q-table__sort-icon) {
+    transition: none;
+  }
+}
+
 .file-table-wrap--dark :deep(.file-browser-table .q-table__bottom) {
   color: rgba(255, 255, 255, 0.7);
 }
@@ -354,13 +566,133 @@ const tablePagination = ref({
   font-size: 18px;
 }
 
-.drop-overlay {
+.drop-target {
+  --drop-bg: #f4f8fc;
+  --drop-border: #5aa3e8;
+  --drop-icon: #3d8fd4;
+  --drop-title: #20252b;
+  --drop-secondary: #5c6670;
+  --drop-leaf: #2a3138;
+  --drop-path: #4a5560;
+  --drop-shadow: 0 6px 20px rgba(32, 37, 43, 0.12);
+  --drop-scrim: rgba(255, 255, 255, 0.28);
+
   position: absolute;
-  inset: 10px;
-  border: 2px dashed var(--q-primary);
-  border-radius: 8px;
+  left: 0;
+  right: 0;
+  top: 34px;
+  bottom: 32px;
   z-index: 10;
   pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.file-table-wrap--dark .drop-target {
+  --drop-bg: #1d2b38;
+  --drop-border: #2f80c9;
+  --drop-icon: #4ea1e0;
+  --drop-title: #f5f7fa;
+  --drop-secondary: #b0bac4;
+  --drop-leaf: #e8eef4;
+  --drop-path: #9aa6b2;
+  --drop-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --drop-scrim: rgba(0, 0, 0, 0.22);
+}
+
+.drop-target--reject {
+  --drop-border: #d64545;
+  --drop-icon: #d64545;
+  --drop-title: #8f1f1f;
+  --drop-bg: #fbf4f4;
+  --drop-shadow: 0 6px 20px rgba(143, 31, 31, 0.12);
+}
+
+.file-table-wrap--dark .drop-target--reject {
+  --drop-border: #e57373;
+  --drop-icon: #ef9a9a;
+  --drop-title: #ffebee;
+  --drop-bg: #2a2226;
+  --drop-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+.drop-target__scrim {
+  position: absolute;
+  inset: 0;
+  background: var(--drop-scrim);
+}
+
+.drop-target__card {
+  position: relative;
+  z-index: 1;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: min(280px, 100%);
+  padding: 24px 28px;
+  border-radius: 10px;
+  border: 1px solid var(--drop-border);
+  background: var(--drop-bg);
+  box-shadow: var(--drop-shadow);
+  text-align: center;
+  animation: drop-target-fade-in 140ms ease-out;
+}
+
+.drop-target__icon {
+  margin-bottom: 2px;
+  color: var(--drop-icon);
+}
+
+.drop-target__title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: 0.01em;
+  color: var(--drop-title);
+}
+
+.drop-target__dest {
+  font-size: 0.8125rem;
+  line-height: 1.35;
+  color: var(--drop-secondary);
+}
+
+.drop-target__leaf {
+  font-weight: 600;
+  color: var(--drop-leaf);
+}
+
+.drop-target__path {
+  position: relative;
+  max-width: 100%;
+  margin-top: 2px;
+  font-size: 0.6875rem;
+  line-height: 1.35;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: var(--drop-path);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@keyframes drop-target-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .drop-target__card {
+    animation: none;
+  }
 }
 
 .ellipsis {
