@@ -60,6 +60,26 @@
         </div>
       </template>
 
+      <template #bottom-row>
+        <q-tr
+          v-if="showLoadMoreRow"
+          class="file-table-load-more-row"
+          :aria-busy="true"
+        >
+          <q-td :colspan="loadMoreColspan" class="file-table-load-more-cell">
+            <div
+              class="file-table-load-more"
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+            >
+              <q-spinner color="primary" size="16px" aria-hidden="true" />
+              <span>Loading more…</span>
+            </div>
+          </q-td>
+        </q-tr>
+      </template>
+
       <template #header-selection="scope">
         <q-checkbox v-model="scope.selected" dense size="xs" />
       </template>
@@ -329,6 +349,12 @@ const props = withDefaults(
 
 const showEmptyState = computed(() => props.rows.length === 0);
 
+const showLoadMoreRow = computed(
+  () => props.loadingMore && props.rows.length > 0,
+);
+
+const loadMoreColspan = computed(() => fileBrowserTableColumns.length + 1);
+
 const showClearFilterAction = computed(
   () =>
     showEmptyState.value &&
@@ -341,16 +367,12 @@ const showClearFilterAction = computed(
 const footerLabel = computed(() => {
   if (props.loading) return "";
 
-  if (props.loadingMore) {
-    return "Loading more…";
-  }
-
   const loaded = props.folderItemCount;
   const total =
     props.listTotal != null && props.listTotal >= 0 ? props.listTotal : null;
 
   if (props.filterQuery) {
-    if (props.hasMore) {
+    if (props.hasMore || props.loadingMore) {
       return total != null
         ? `Filtering loaded items (${loaded.toLocaleString()} of ${total.toLocaleString()})`
         : `Filtering loaded items (${loaded.toLocaleString()} loaded)`;
@@ -360,7 +382,7 @@ const footerLabel = computed(() => {
 
   if (loaded <= 0 && props.rows.length === 0) return "";
 
-  if (props.hasMore) {
+  if (props.hasMore || props.loadingMore) {
     if (total != null && total > loaded) {
       return `${loaded.toLocaleString()} of ${total.toLocaleString()} loaded`;
     }
@@ -814,6 +836,39 @@ onBeforeUnmount(() => {
 
 .file-table-wrap :deep(.file-browser-table tbody tr.file-table-row) {
   height: var(--file-browser-row-height);
+}
+
+.file-table-load-more-row {
+  pointer-events: none;
+  user-select: none;
+}
+
+.file-table-wrap :deep(.file-table-load-more-row:hover > td) {
+  background: transparent !important;
+}
+
+.file-table-wrap :deep(.file-table-load-more-cell) {
+  height: auto !important;
+  min-height: var(--file-browser-row-height);
+  max-height: none !important;
+  padding: 10px 12px !important;
+  border-bottom: none !important;
+}
+
+.file-table-load-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  font-size: 0.8125rem;
+  line-height: 1.3;
+  letter-spacing: 0.01em;
+  color: rgba(0, 0, 0, 0.55);
+}
+
+.file-table-wrap--dark .file-table-load-more {
+  color: rgba(255, 255, 255, 0.55);
 }
 
 .file-table-wrap--dark :deep(.file-browser-table tbody td) {
