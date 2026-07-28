@@ -3,7 +3,7 @@
     class="row items-center justify-between file-toolbar"
     :class="{ 'file-toolbar--dark': $q.dark.isActive }"
   >
-    <div class="row items-center q-gutter-sm">
+    <div class="row items-center q-gutter-sm file-toolbar__actions">
       <q-btn
         dense
         unelevated
@@ -90,7 +90,9 @@
       </q-btn>
     </div>
 
-    <div class="row items-center q-gutter-sm">
+    <div
+      class="row items-center q-gutter-sm file-toolbar__trailing min-width-0"
+    >
       <q-btn
         v-if="showTransfers"
         dense
@@ -114,27 +116,43 @@
         </q-tooltip>
       </q-btn>
 
-      <q-input
-        :model-value="search"
-        dense
-        outlined
-        clearable
-        hide-bottom-space
-        class="toolbar-search"
-        placeholder="Filter by name in this folder"
-        :dark="$q.dark.isActive"
-        @update:model-value="onSearchUpdate"
-      >
-        <template #prepend>
-          <q-icon name="search" size="18px" />
-        </template>
-      </q-input>
+      <div class="toolbar-search-wrap row items-center no-wrap min-width-0">
+        <span
+          v-if="showFilterCount"
+          class="toolbar-filter-count"
+          :class="{ 'toolbar-filter-count--stale': listingLoading }"
+          aria-live="polite"
+        >
+          {{ filterCountLabel }}
+        </span>
+
+        <q-input
+          ref="searchInputRef"
+          :model-value="search"
+          dense
+          outlined
+          clearable
+          hide-bottom-space
+          class="toolbar-search"
+          :class="{ 'toolbar-search--active': filterActive }"
+          placeholder="Filter by name in this folder"
+          aria-label="Filter by name in this folder"
+          :dark="$q.dark.isActive"
+          @update:model-value="onSearchUpdate"
+          @keydown="onSearchKeydown"
+        >
+          <template #prepend>
+            <q-icon name="search" size="18px" />
+          </template>
+        </q-input>
+      </div>
 
       <q-btn
         dense
         unelevated
         icon="refresh"
         class="toolbar-btn toolbar-icon-btn"
+        aria-label="Refresh folder"
         @click="emit('refresh')"
       />
     </div>
@@ -142,19 +160,32 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { useQuasar } from "quasar";
 
 const $q = useQuasar();
 
-const props = defineProps<{
-  hasUploadPath: boolean;
-  selectedCount: number;
-  search: string;
-  showTransfers?: boolean;
-  transfersLabel?: string;
-  pausedCount?: number;
-}>();
+const props = withDefaults(
+  defineProps<{
+    hasUploadPath: boolean;
+    selectedCount: number;
+    search: string;
+    showTransfers?: boolean;
+    transfersLabel?: string;
+    pausedCount?: number;
+    filterMatchCount?: number;
+    filterTotalCount?: number;
+    listingLoading?: boolean;
+  }>(),
+  {
+    showTransfers: false,
+    transfersLabel: "Transfers",
+    pausedCount: 0,
+    filterMatchCount: 0,
+    filterTotalCount: 0,
+    listingLoading: false,
+  },
+);
 
 const emit = defineEmits<{
   (e: "upload"): void;
@@ -169,6 +200,24 @@ const emit = defineEmits<{
   (e: "update:search", value: string): void;
 }>();
 
+type SearchInputExpose = {
+  focus: () => void;
+  getNativeElement?: () => HTMLInputElement;
+  $el?: HTMLElement;
+};
+
+const searchInputRef = ref<SearchInputExpose | null>(null);
+
+const filterActive = computed(() => (props.search ?? "").trim().length > 0);
+
+const showFilterCount = computed(() => filterActive.value);
+
+const filterCountLabel = computed(() => {
+  const match = props.filterMatchCount ?? 0;
+  const total = props.filterTotalCount ?? 0;
+  return `${match} of ${total} items`;
+});
+
 const pausedTooltip = computed(() =>
   (props.pausedCount ?? 0) === 1
     ? "1 paused"
@@ -178,11 +227,39 @@ const pausedTooltip = computed(() =>
 function onSearchUpdate(val: string | number | null) {
   emit("update:search", String(val ?? ""));
 }
+
+function onSearchKeydown(e: KeyboardEvent) {
+  if (e.key !== "Escape") return;
+  e.stopPropagation();
+  if ((props.search ?? "").length > 0) {
+    e.preventDefault();
+    emit("update:search", "");
+    return;
+  }
+  (e.target as HTMLElement | null)?.blur?.();
+}
+
+function focusSearch() {
+  const input = searchInputRef.value;
+  input?.focus?.();
+  const native =
+    (input?.getNativeElement?.() as HTMLInputElement | undefined) ??
+    (input?.$el?.querySelector?.("input") as HTMLInputElement | null);
+  native?.select?.();
+}
+
+defineExpose({
+  focusSearch,
+});
 </script>
 
 <style scoped>
 .file-toolbar {
   gap: 12px;
+}
+
+.file-toolbar__trailing {
+  flex: 0 1 auto;
 }
 
 .file-toolbar :deep(.q-btn) {
@@ -250,26 +327,52 @@ function onSearchUpdate(val: string | number | null) {
   padding: 0;
 }
 
+.toolbar-search-wrap {
+  gap: 8px;
+  min-width: 0;
+}
+
+.toolbar-filter-count {
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  color: #5c6670;
+  font-variant-numeric: tabular-nums;
+}
+
+.toolbar-filter-count--stale {
+  opacity: 0.45;
+}
+
 .file-toolbar :deep(.toolbar-search) {
-  width: 260px;
+  width: clamp(160px, 22vw, 280px);
+  min-width: 140px;
+  max-width: 280px;
 }
 
 .file-toolbar :deep(.toolbar-search .q-field__control) {
   min-height: 32px;
   height: 32px;
   border-radius: 6px;
-  background: #fff;
+  background: #f4f8fc;
   align-items: center;
 }
 
 .file-toolbar :deep(.toolbar-search .q-field__control:before) {
-  border-color: #d0d0d0;
+  border-color: #c5d4e3;
+}
+
+.file-toolbar :deep(.toolbar-search--active .q-field__control:before) {
+  border-color: #5aa3e8;
 }
 
 .file-toolbar :deep(.toolbar-search .q-field__prepend) {
   height: 32px;
   padding-right: 6px;
   align-self: center;
+  color: #5c6670;
 }
 
 .file-toolbar :deep(.toolbar-search .q-field__prepend .q-icon) {
@@ -281,6 +384,12 @@ function onSearchUpdate(val: string | number | null) {
   line-height: 32px;
   padding-top: 0;
   padding-bottom: 0;
+  color: #20252b;
+}
+
+.file-toolbar :deep(.toolbar-search .q-field__native::placeholder) {
+  color: #7a8692;
+  opacity: 1;
 }
 
 .file-context-menu .q-item__section--avatar {
@@ -311,16 +420,28 @@ function onSearchUpdate(val: string | number | null) {
   color: rgba(255, 255, 255, 0.45);
 }
 
+.file-toolbar--dark .toolbar-filter-count {
+  color: #b0bac4;
+}
+
 .file-toolbar--dark :deep(.toolbar-search .q-field__control) {
-  background: rgba(255, 255, 255, 0.06);
+  background: #1d2b38;
 }
 
 .file-toolbar--dark :deep(.toolbar-search .q-field__control:before) {
-  border-color: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.18);
 }
 
-.file-toolbar--dark :deep(.toolbar-search input) {
-  color: rgba(255, 255, 255, 0.88);
+.file-toolbar--dark :deep(.toolbar-search--active .q-field__control:before) {
+  border-color: #2f80c9;
+}
+
+.file-toolbar--dark :deep(.toolbar-search .q-field__prepend) {
+  color: #b0bac4;
+}
+
+.file-toolbar--dark :deep(.toolbar-search .q-field__native) {
+  color: #f5f7fa;
 }
 
 .file-toolbar--dark :deep(.toolbar-search .q-field__native::placeholder) {

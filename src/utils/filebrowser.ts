@@ -384,6 +384,50 @@ export function sortFileBrowserRows(
   });
 }
 
+export function normalizeFileBrowserFilterQuery(
+  query: string | null | undefined,
+): string {
+  return (query ?? "").trim();
+}
+
+export function filterFileBrowserRowsByName(
+  rows: FileBrowserItem[],
+  query: string | null | undefined,
+): FileBrowserItem[] {
+  const q = normalizeFileBrowserFilterQuery(query).toLowerCase();
+  if (!q) return rows;
+  return rows.filter((row) => row.name.toLowerCase().includes(q));
+}
+
+export function getFileBrowserNameHighlightParts(
+  name: string,
+  query: string | null | undefined,
+): { text: string; match: boolean }[] {
+  const q = normalizeFileBrowserFilterQuery(query);
+  if (!q || !name) return [{ text: name, match: false }];
+
+  const lowerName = name.toLowerCase();
+  const lowerQ = q.toLowerCase();
+  const parts: { text: string; match: boolean }[] = [];
+  let start = 0;
+  let idx = lowerName.indexOf(lowerQ, start);
+
+  while (idx !== -1) {
+    if (idx > start) {
+      parts.push({ text: name.slice(start, idx), match: false });
+    }
+    parts.push({ text: name.slice(idx, idx + q.length), match: true });
+    start = idx + q.length;
+    idx = lowerName.indexOf(lowerQ, start);
+  }
+
+  if (start < name.length) {
+    parts.push({ text: name.slice(start), match: false });
+  }
+
+  return parts.length > 0 ? parts : [{ text: name, match: false }];
+}
+
 export function isFileDrag(
   dataTransfer: DataTransfer | null | undefined,
 ): boolean {

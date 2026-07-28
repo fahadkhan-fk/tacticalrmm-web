@@ -17,6 +17,7 @@
       virtual-scroll
       row-key="id"
       class="file-browser-table file-browser-table--fill"
+      :class="{ 'file-browser-table--filtering': !!filterQuery }"
       :table-class="{
         'table-bgcolor': !$q.dark.isActive,
         'table-bgcolor-dark': $q.dark.isActive,
@@ -34,6 +35,15 @@
     >
       <template #no-data>
         <span class="hidden-no-data-slot" aria-hidden="true" />
+      </template>
+
+      <template #bottom>
+        <div
+          class="file-table-footer"
+          :class="{ 'file-table-footer--muted': !footerLabel }"
+        >
+          {{ footerLabel }}
+        </div>
       </template>
 
       <template #header-selection="scope">
@@ -135,7 +145,17 @@
                 size="20px"
                 class="q-mr-sm"
               />
-              <span class="ellipsis">{{ props.row.name }}</span>
+              <span class="ellipsis file-name-label">
+                <template
+                  v-for="(part, idx) in nameHighlightParts(props.row.name)"
+                  :key="`${props.row.id}-${idx}`"
+                >
+                  <mark v-if="part.match" class="file-name-match">{{
+                    part.text
+                  }}</mark>
+                  <template v-else>{{ part.text }}</template>
+                </template>
+              </span>
             </div>
           </q-td>
 
@@ -161,10 +181,23 @@
     <div
       v-if="showEmptyState"
       class="file-browser-empty-state"
-      :class="{ 'file-browser-empty-state--error': emptyIsError }"
+      :class="{
+        'file-browser-empty-state--error': emptyIsError,
+        'file-browser-empty-state--filter': showClearFilterAction,
+      }"
       aria-live="polite"
     >
       <span class="file-browser-empty-state__label">{{ noDataLabel }}</span>
+      <q-btn
+        v-if="showClearFilterAction"
+        flat
+        dense
+        no-caps
+        color="primary"
+        label="Clear filter"
+        class="file-browser-empty-state__clear"
+        @click="emit('clear-filter')"
+      />
     </div>
 
     <div
@@ -218,6 +251,7 @@ import {
   collectDroppedUploadFiles,
   formatDropOverlayTitle,
   fileBrowserPathLeaf,
+  getFileBrowserNameHighlightParts,
   inspectFileDrag,
   isFileDrag,
   resolveDropOverlayReject,
@@ -241,6 +275,8 @@ const props = withDefaults(
     queueRoom?: number;
     maxFilesPerSelection?: number;
     maxFileSizeBytes?: number;
+    filterQuery?: string;
+    folderItemCount?: number;
   }>(),
   {
     dropEnabled: false,
@@ -248,12 +284,31 @@ const props = withDefaults(
     queueRoom: Number.POSITIVE_INFINITY,
     maxFilesPerSelection: 100,
     maxFileSizeBytes: 0,
+    filterQuery: "",
+    folderItemCount: 0,
   },
 );
 
 const showEmptyState = computed(
   () => !props.loading && props.rows.length === 0,
 );
+
+const showClearFilterAction = computed(
+  () =>
+    showEmptyState.value &&
+    !props.emptyIsError &&
+    !!props.filterQuery &&
+    props.folderItemCount > 0,
+);
+
+const footerLabel = computed(() => {
+  if (props.loading) return "";
+  if (props.filterQuery) return "";
+  const n = props.folderItemCount;
+  if (n <= 0 && props.rows.length === 0) return "";
+  const count = n > 0 ? n : props.rows.length;
+  return count === 1 ? "1 item" : `${count} items`;
+});
 
 const emit = defineEmits<{
   (e: "row-dblclick", row: FileBrowserItem): void;
@@ -266,6 +321,7 @@ const emit = defineEmits<{
   (e: "update:selected", value: FileBrowserItem[]): void;
   (e: "files-dropped", payload: { files: File[]; folderCount: number }): void;
   (e: "drop-rejected", reason: DropOverlayRejectReason): void;
+  (e: "clear-filter"): void;
 }>();
 
 const selected = useModel(props, "selected");
@@ -314,6 +370,10 @@ const dropRegionLabel = computed(() => {
   }
   return "File list. Drop files here to upload, or use the Upload button.";
 });
+
+function nameHighlightParts(name: string) {
+  return getFileBrowserNameHighlightParts(name, props.filterQuery);
+}
 
 function resetDragState() {
   dragCounter.value = 0;
@@ -475,8 +535,10 @@ onBeforeUnmount(() => {
   top: 34px;
   bottom: 32px;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 10px;
   padding: 24px;
   pointer-events: none;
   z-index: 1;
@@ -487,6 +549,38 @@ onBeforeUnmount(() => {
   font-size: 0.95rem;
   line-height: 1.4;
   color: rgba(0, 0, 0, 0.55);
+  max-width: 420px;
+  overflow-wrap: anywhere;
+}
+
+.file-browser-empty-state__clear {
+  pointer-events: auto;
+}
+
+.file-table-footer {
+  width: 100%;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 10px;
+  font-size: 12px;
+  line-height: 1;
+  color: rgba(0, 0, 0, 0.55);
+  box-sizing: border-box;
+}
+
+.file-table-footer--muted {
+  color: transparent;
+  user-select: none;
+}
+
+.file-table-wrap--dark .file-table-footer {
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.file-table-wrap--dark .file-table-footer--muted {
+  color: transparent;
 }
 
 .file-table-wrap--dark .file-browser-empty-state__label {
@@ -700,5 +794,32 @@ onBeforeUnmount(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.file-name-label {
+  display: inline-block;
+  vertical-align: bottom;
+}
+
+.file-name-match {
+  padding: 0;
+  margin: 0;
+  background: rgba(90, 163, 232, 0.35);
+  color: inherit;
+  border-radius: 2px;
+}
+
+.file-table-wrap--dark .file-name-match {
+  background: rgba(47, 128, 201, 0.45);
+}
+
+.file-table-wrap :deep(.file-table-row:hover .file-name-match),
+.file-table-wrap :deep(.file-table-row.selected .file-name-match) {
+  background: rgba(90, 163, 232, 0.5);
+}
+
+.file-table-wrap--dark :deep(.file-table-row:hover .file-name-match),
+.file-table-wrap--dark :deep(.file-table-row.selected .file-name-match) {
+  background: rgba(47, 128, 201, 0.62);
 }
 </style>

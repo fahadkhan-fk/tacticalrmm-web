@@ -1,7 +1,9 @@
 <template>
   <div
+    ref="rootRef"
     class="file-browser column no-wrap q-pa-sm"
     :class="{ 'file-browser--dark': $q.dark.isActive }"
+    tabindex="-1"
     @dragover="onBrowserDragOver"
     @drop="onBrowserDrop"
   >
@@ -24,9 +26,13 @@
     />
 
     <FileBrowserToolbar
+      ref="toolbarRef"
       :has-upload-path="hasUploadPath"
       :selected-count="selectedRows.length"
       :search="search"
+      :filter-match-count="filteredRows.length"
+      :filter-total-count="rows.length"
+      :listing-loading="loading"
       :show-transfers="showTransfersIndicator"
       :transfers-label="transfersIndicatorLabel"
       :paused-count="pausedTransferCount"
@@ -98,6 +104,8 @@
       :queue-room="uploadQueueRoom"
       :max-files-per-selection="MAX_UPLOAD_FILES_PER_SELECTION"
       :max-file-size-bytes="MAX_UPLOAD_FILE_SIZE_BYTES"
+      :filter-query="activeFilterQuery"
+      :folder-item-count="rows.length"
       @row-dblclick="onRowDoubleClick"
       @open-folder="openFolder"
       @download="downloadFromContext"
@@ -107,6 +115,7 @@
       @copy-path="copyPathFromContext"
       @files-dropped="onFilesDropped"
       @drop-rejected="onDropRejected"
+      @clear-filter="clearFolderFilter"
     />
 
     <FileBrowserPropertiesDialog
@@ -145,7 +154,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, toRef, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, toRef, watch } from "vue";
 import { copyToClipboard, useQuasar } from "quasar";
 
 import {
@@ -215,6 +224,7 @@ import {
   defaultFileBrowserRootPath,
   dropRejectToastMessage,
   fileListToArray,
+  filterFileBrowserRowsByName,
   classifyDownloadSelection,
   deriveArchiveDownloadName,
   getFileBrowserErrorMessage,
@@ -230,6 +240,7 @@ import {
   mapApiItemToFileBrowserItem,
   mapApiItemsToFileBrowserItems,
   normalizeAgentListPath,
+  normalizeFileBrowserFilterQuery,
   type DropOverlayRejectReason,
   type UploadConflictAction,
 } from "@/utils/filebrowser";
@@ -260,6 +271,8 @@ const listError = ref<string | null>(null);
 const currentPath = ref("");
 const search = ref("");
 const selectedRows = ref<FileBrowserItem[]>([]);
+const toolbarRef = ref<{ focusSearch: () => void } | null>(null);
+const rootRef = ref<HTMLElement | null>(null);
 
 const history = ref<string[]>([]);
 const historyIndex = ref(0);
@@ -396,18 +409,26 @@ const uploadLimitsCaption = computed(
     `No file size limit · Up to ${MAX_UPLOAD_FILES_PER_SELECTION} files per selection`,
 );
 
-const filteredRows = computed(() => {
-  const q = (search.value ?? "").trim().toLowerCase();
-  if (!q) return rows.value;
-  return rows.value.filter((row) => row.name.toLowerCase().includes(q));
-});
+const filteredRows = computed(() =>
+  filterFileBrowserRowsByName(rows.value, search.value),
+);
+
+const activeFilterQuery = computed(() =>
+  normalizeFileBrowserFilterQuery(search.value),
+);
 
 const tableNoDataLabel = computed(() => {
+  if (loading.value) return "";
   if (listError.value) return listError.value;
-  const q = (search.value ?? "").trim();
-  if (q && rows.value.length > 0) return "No items match your filter";
+  if (activeFilterQuery.value && rows.value.length > 0) {
+    return `No files or folders match “${activeFilterQuery.value}”`;
+  }
   return "Folder is empty";
 });
+
+function clearFolderFilter() {
+  if (search.value) search.value = "";
+}
 
 function resetNavigationHistory(path: string) {
   history.value = [path];
@@ -472,21 +493,35 @@ async function refresh() {
 onMounted(() => {
   initializeRootPath();
   void refresh();
+  window.addEventListener("keydown", onGlobalFindShortcut);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener("keydown", onGlobalFindShortcut);
 });
 
 watch(
   () => [props.agent_id, props.agentPlatform] as const,
   () => {
+    clearFolderFilter();
     initializeRootPath();
     void refresh();
   },
 );
 
+watch(activeFilterQuery, () => {
+  if (selectedRows.value.length) selectedRows.value = [];
+});
+
 watch(
   filteredRows,
   (visible) => {
+    if (!selectedRows.value.length) return;
     const ids = new Set(visible.map((r) => r.id));
-    selectedRows.value = selectedRows.value.filter((s) => ids.has(s.id));
+    const next = selectedRows.value.filter((s) => ids.has(s.id));
+    if (next.length !== selectedRows.value.length) {
+      selectedRows.value = next;
+    }
   },
   { flush: "post" },
 );
@@ -1358,6 +1393,7 @@ function setPath(path: string) {
     return;
   }
 
+  clearFolderFilter();
   currentPath.value = normalized;
   selectedRows.value = [];
 
@@ -1371,6 +1407,7 @@ function setPath(path: string) {
 function goBack() {
   if (!canGoBack.value) return;
 
+  clearFolderFilter();
   historyIndex.value -= 1;
   currentPath.value = history.value[historyIndex.value];
   selectedRows.value = [];
@@ -1380,6 +1417,7 @@ function goBack() {
 function goForward() {
   if (!canGoForward.value) return;
 
+  clearFolderFilter();
   historyIndex.value += 1;
   currentPath.value = history.value[historyIndex.value];
   selectedRows.value = [];
@@ -1891,6 +1929,45 @@ function isFileDragEvent(e: DragEvent): boolean {
   return false;
 }
 
+function onGlobalFindShortcut(e: KeyboardEvent) {
+  if (!(e.ctrlKey || e.metaKey)) return;
+  if (e.key.toLowerCase() !== "f") return;
+  if (e.altKey || e.shiftKey) return;
+
+  const root = rootRef.value;
+  // Hidden tab panels (display:none / zero boxes) must not steal browser find.
+  if (!root || root.getClientRects().length === 0) return;
+
+  const active = document.activeElement as HTMLElement | null;
+  const focusInside = !!(active && root.contains(active));
+  const focusIsBody =
+    !active || active === document.body || active === document.documentElement;
+  if (!focusInside && !focusIsBody) return;
+
+  // Teleported dialogs / terminal / menus sit outside our root.
+  if (
+    active?.closest?.(
+      ".q-dialog, .q-menu, .xterm, [role='dialog'], [contenteditable='true']",
+    )
+  ) {
+    return;
+  }
+
+  if (
+    active &&
+    (active.tagName === "INPUT" ||
+      active.tagName === "TEXTAREA" ||
+      active.tagName === "SELECT" ||
+      active.isContentEditable) &&
+    !active.closest(".toolbar-search")
+  ) {
+    return;
+  }
+
+  e.preventDefault();
+  toolbarRef.value?.focusSearch();
+}
+
 function onFilesDropped(payload: { files: File[]; folderCount: number }) {
   if (!payload.files.length && payload.folderCount <= 0) return;
   void queueFilesForUpload(payload.files, {
@@ -1918,6 +1995,7 @@ function onDropRejected(reason: DropOverlayRejectReason) {
   overflow: hidden;
   gap: 12px;
   box-sizing: border-box;
+  outline: none;
 }
 
 .file-browser > :not(.file-table-wrap) {
