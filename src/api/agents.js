@@ -431,6 +431,11 @@ export async function fetchAgentFiles(
   }
 }
 
+/**
+ * Fetches every page until has_more is false.
+ * File Browser UI uses paged fetchAgentFiles + infinite scroll instead;
+ * keep this helper for tooling / one-shot full dumps only.
+ */
 export async function fetchAgentFilesAll(
   agent_id,
   path,

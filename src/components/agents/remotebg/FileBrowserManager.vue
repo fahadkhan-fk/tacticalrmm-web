@@ -106,6 +106,9 @@
       :max-file-size-bytes="MAX_UPLOAD_FILE_SIZE_BYTES"
       :filter-query="activeFilterQuery"
       :folder-item-count="rows.length"
+      :list-total="listTotal"
+      :has-more="listHasMore"
+      :loading-more="loadingMore"
       @row-dblclick="onRowDoubleClick"
       @open-folder="openFolder"
       @download="downloadFromContext"
@@ -116,6 +119,7 @@
       @files-dropped="onFilesDropped"
       @drop-rejected="onDropRejected"
       @clear-filter="clearFolderFilter"
+      @load-more="loadMoreRows"
     />
 
     <FileBrowserPropertiesDialog
@@ -165,7 +169,8 @@ import {
   createAgentFileFolder,
   deleteAgentFiles,
   fetchAgentFileProperties,
-  fetchAgentFilesAll,
+  fetchAgentFiles,
+  FILE_BROWSER_DEFAULT_PAGE_SIZE,
   renameAgentFile,
 } from "@/api/agents";
 import FileBrowserDownloadProgress from "@/components/agents/remotebg/FileBrowserDownloadProgress.vue";
@@ -188,6 +193,8 @@ import {
   MAX_UPLOAD_FILE_SIZE_BYTES,
   MAX_UPLOAD_FILES_PER_SELECTION,
   MAX_UPLOAD_QUEUE_ITEMS,
+  FILE_BROWSER_MAX_LOADED_ITEMS,
+  FILE_BROWSER_LOAD_MORE_THRESHOLD,
 } from "@/constants/filebrowser";
 import { FILE_TRANSFER_DEFAULT_CHUNK_SIZE } from "@/constants/fileTransfer";
 import type {
@@ -314,6 +321,11 @@ let downloadStopAllRequested = false;
 let loadSeq = 0;
 
 const mutationSaving = ref(false);
+const loadingMore = ref(false);
+const listPage = ref(1);
+const listHasMore = ref(false);
+const listTotal = ref<number | null>(null);
+const listSoftCapped = ref(false);
 
 const visibleUploadQueueItems = computed(() =>
   uploadQueue.value.filter((item) => !item.hidden),
@@ -418,9 +430,13 @@ const activeFilterQuery = computed(() =>
 );
 
 const tableNoDataLabel = computed(() => {
+  // Loading uses the table spinner — never treat in-flight refresh as no-match.
   if (loading.value) return "";
   if (listError.value) return listError.value;
   if (activeFilterQuery.value && rows.value.length > 0) {
+    if (listHasMore.value) {
+      return `No files or folders match “${activeFilterQuery.value}” in the ${rows.value.length.toLocaleString()} loaded items`;
+    }
     return `No files or folders match “${activeFilterQuery.value}”`;
   }
   return "Folder is empty";
@@ -428,6 +444,39 @@ const tableNoDataLabel = computed(() => {
 
 function clearFolderFilter() {
   if (search.value) search.value = "";
+}
+
+function resetListPagingState() {
+  listPage.value = 1;
+  listHasMore.value = false;
+  listTotal.value = null;
+  listSoftCapped.value = false;
+  loadingMore.value = false;
+}
+
+function applyListPageMeta(data: {
+  has_more?: boolean;
+  page?: number;
+  total?: number;
+}) {
+  listPage.value = Number(data.page) > 0 ? Number(data.page) : listPage.value;
+  listHasMore.value = !!data.has_more && !listSoftCapped.value;
+  if (typeof data.total === "number" && data.total >= 0) {
+    listTotal.value = data.total;
+  }
+}
+
+function appendUniqueRows(incoming: FileBrowserItem[]) {
+  if (!incoming.length) return;
+  if (!rows.value.length) {
+    rows.value = incoming;
+    return;
+  }
+  const existing = new Set(rows.value.map((r) => r.id));
+  const added = incoming.filter((r) => !existing.has(r.id));
+  if (added.length) {
+    rows.value = rows.value.concat(added);
+  }
 }
 
 function resetNavigationHistory(path: string) {
@@ -446,21 +495,35 @@ async function refresh() {
   if (!path) {
     listError.value = "Path is required";
     rows.value = [];
+    resetListPagingState();
     return;
   }
+
+  const previousPath = currentPath.value;
+  const pathChanged =
+    !previousPath || !pathsEqual(previousPath, path) || rows.value.length === 0;
 
   currentPath.value = path;
 
   const seq = ++loadSeq;
   loading.value = true;
+  loadingMore.value = false;
   listError.value = null;
   selectedRows.value = [];
+  resetListPagingState();
+
+  // Only clear rows when the folder actually changes. Same-folder Refresh
+  // keeps the current list visible under a light progress bar (no blank flash).
+  if (pathChanged) {
+    rows.value = [];
+  }
 
   try {
-    const data = await fetchAgentFilesAll(
+    const data = await fetchAgentFiles(
       props.agent_id,
       path,
-      undefined,
+      1,
+      FILE_BROWSER_DEFAULT_PAGE_SIZE,
       agentPlatform.value,
     );
     if (seq !== loadSeq) return;
@@ -470,11 +533,13 @@ async function refresh() {
       data.items ?? [],
       agentPlatform.value,
     );
+    applyListPageMeta(data);
     listError.value = null;
   } catch (err: unknown) {
     if (seq !== loadSeq) return;
 
     rows.value = [];
+    resetListPagingState();
     const message = getListFilesErrorMessage(err);
     listError.value = message;
 
@@ -486,6 +551,76 @@ async function refresh() {
   } finally {
     if (seq === loadSeq) {
       loading.value = false;
+    }
+  }
+}
+
+/**
+ * Infinite-scroll continuation. Shares loadSeq with refresh so navigate/refresh
+ * mid-fetch discards the stale page. Does not clear selection or filter.
+ */
+async function loadMoreRows() {
+  if (
+    loading.value ||
+    loadingMore.value ||
+    !listHasMore.value ||
+    listSoftCapped.value
+  ) {
+    return;
+  }
+
+  if (rows.value.length >= FILE_BROWSER_MAX_LOADED_ITEMS) {
+    listSoftCapped.value = true;
+    listHasMore.value = false;
+    notifyInfo(
+      `Showing the first ${FILE_BROWSER_MAX_LOADED_ITEMS.toLocaleString()} items in this folder.`,
+    );
+    return;
+  }
+
+  const path = normalizeNavPath(currentPath.value.trim());
+  if (!path) return;
+
+  const seq = loadSeq;
+  const nextPage = listPage.value + 1;
+  loadingMore.value = true;
+
+  try {
+    const data = await fetchAgentFiles(
+      props.agent_id,
+      path,
+      nextPage,
+      FILE_BROWSER_DEFAULT_PAGE_SIZE,
+      agentPlatform.value,
+    );
+    if (seq !== loadSeq) return;
+
+    const mapped = mapApiItemsToFileBrowserItems(
+      data.items ?? [],
+      agentPlatform.value,
+    );
+    appendUniqueRows(mapped);
+    applyListPageMeta(data);
+
+    if (
+      rows.value.length >= FILE_BROWSER_MAX_LOADED_ITEMS &&
+      listHasMore.value
+    ) {
+      listSoftCapped.value = true;
+      listHasMore.value = false;
+      notifyInfo(
+        `Showing the first ${FILE_BROWSER_MAX_LOADED_ITEMS.toLocaleString()} items in this folder.`,
+      );
+    }
+  } catch (err: unknown) {
+    if (seq !== loadSeq) return;
+    const message = getListFilesErrorMessage(err);
+    notifyWarning(
+      message || "Unable to load more items. Scroll again to retry.",
+    );
+  } finally {
+    if (seq === loadSeq) {
+      loadingMore.value = false;
     }
   }
 }
@@ -522,6 +657,26 @@ watch(
     if (next.length !== selectedRows.value.length) {
       selectedRows.value = next;
     }
+  },
+  { flush: "post" },
+);
+
+/**
+ * When the visible list is short (filter with few/no matches, or a short
+ * viewport that cannot scroll), keep fetching so operators are not stuck
+ * needing a scroll gesture that is impossible.
+ */
+watch(
+  [loadingMore, listHasMore, filteredRows, loading],
+  () => {
+    if (loading.value || loadingMore.value || !listHasMore.value) return;
+    if (filteredRows.value.length > FILE_BROWSER_LOAD_MORE_THRESHOLD) return;
+    // Let the first page paint before chaining the next request.
+    window.setTimeout(() => {
+      if (loading.value || loadingMore.value || !listHasMore.value) return;
+      if (filteredRows.value.length > FILE_BROWSER_LOAD_MORE_THRESHOLD) return;
+      void loadMoreRows();
+    }, 50);
   },
   { flush: "post" },
 );

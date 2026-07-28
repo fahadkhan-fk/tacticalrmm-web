@@ -11,20 +11,30 @@
     @dragleave.prevent="onDragLeave"
     @drop.prevent="onDrop"
   >
+    <div
+      v-if="loading || loadingMore"
+      class="file-table-progress"
+      :class="{ 'file-table-progress--more': loadingMore && !loading }"
+      aria-hidden="true"
+    />
+
     <q-table
       flat
       dense
       virtual-scroll
       row-key="id"
       class="file-browser-table file-browser-table--fill"
-      :class="{ 'file-browser-table--filtering': !!filterQuery }"
+      :class="{
+        'file-browser-table--filtering': !!filterQuery,
+        'file-browser-table--busy': loading && rows.length > 0,
+      }"
       :table-class="{
         'table-bgcolor': !$q.dark.isActive,
         'table-bgcolor-dark': $q.dark.isActive,
       }"
       :rows="rows"
       :columns="columns"
-      :loading="loading"
+      :loading="false"
       v-model:pagination="tablePagination"
       :sort-method="sortFileBrowserRows"
       binary-state-sort
@@ -32,6 +42,9 @@
       selection="multiple"
       v-model:selected="selected"
       :no-data-label="noDataLabel"
+      :virtual-scroll-item-size="36"
+      :virtual-scroll-sticky-start="34"
+      @virtual-scroll="onVirtualScroll"
     >
       <template #no-data>
         <span class="hidden-no-data-slot" aria-hidden="true" />
@@ -133,19 +146,19 @@
             </q-list>
           </q-menu>
 
-          <q-td auto-width>
+          <q-td class="file-col-select">
             <q-checkbox v-model="props.selected" dense size="xs" />
           </q-td>
 
           <q-td key="name" :props="props">
-            <div class="row items-center no-wrap">
+            <div class="row items-center no-wrap file-name-cell">
               <q-icon
                 :name="props.row.type === 'folder' ? 'folder' : 'description'"
                 :color="props.row.type === 'folder' ? 'yellow-8' : 'primary'"
                 size="20px"
-                class="q-mr-sm"
+                class="q-mr-sm file-name-icon"
               />
-              <span class="ellipsis file-name-label">
+              <span class="ellipsis file-name-label" :title="props.row.name">
                 <template
                   v-for="(part, idx) in nameHighlightParts(props.row.name)"
                   :key="`${props.row.id}-${idx}`"
@@ -187,9 +200,12 @@
       }"
       aria-live="polite"
     >
-      <span class="file-browser-empty-state__label">{{ noDataLabel }}</span>
+      <q-spinner v-if="loading" color="primary" size="28px" class="q-mb-sm" />
+      <span v-else class="file-browser-empty-state__label">{{
+        noDataLabel
+      }}</span>
       <q-btn
-        v-if="showClearFilterAction"
+        v-if="showClearFilterAction && !loading"
         flat
         dense
         no-caps
@@ -259,6 +275,7 @@ import {
   truncatePathMiddle,
   type DropOverlayRejectReason,
 } from "@/utils/filebrowser";
+import { FILE_BROWSER_LOAD_MORE_THRESHOLD } from "@/constants/filebrowser";
 import type { FileBrowserItem } from "@/types/filebrowser";
 
 const $q = useQuasar();
@@ -276,7 +293,14 @@ const props = withDefaults(
     maxFilesPerSelection?: number;
     maxFileSizeBytes?: number;
     filterQuery?: string;
+    /** Number of items loaded so far (unfiltered). */
     folderItemCount?: number;
+    /** Agent-reported folder total when known. */
+    listTotal?: number | null;
+    /** More pages available from the agent. */
+    hasMore?: boolean;
+    /** Next page fetch in flight (scroll load). */
+    loadingMore?: boolean;
   }>(),
   {
     dropEnabled: false,
@@ -286,16 +310,18 @@ const props = withDefaults(
     maxFileSizeBytes: 0,
     filterQuery: "",
     folderItemCount: 0,
+    listTotal: null,
+    hasMore: false,
+    loadingMore: false,
   },
 );
 
-const showEmptyState = computed(
-  () => !props.loading && props.rows.length === 0,
-);
+const showEmptyState = computed(() => props.rows.length === 0);
 
 const showClearFilterAction = computed(
   () =>
     showEmptyState.value &&
+    !props.loading &&
     !props.emptyIsError &&
     !!props.filterQuery &&
     props.folderItemCount > 0,
@@ -303,11 +329,35 @@ const showClearFilterAction = computed(
 
 const footerLabel = computed(() => {
   if (props.loading) return "";
-  if (props.filterQuery) return "";
-  const n = props.folderItemCount;
-  if (n <= 0 && props.rows.length === 0) return "";
-  const count = n > 0 ? n : props.rows.length;
-  return count === 1 ? "1 item" : `${count} items`;
+
+  if (props.loadingMore) {
+    return "Loading more…";
+  }
+
+  const loaded = props.folderItemCount;
+  const total =
+    props.listTotal != null && props.listTotal >= 0 ? props.listTotal : null;
+
+  if (props.filterQuery) {
+    if (props.hasMore) {
+      return total != null
+        ? `Filtering loaded items (${loaded.toLocaleString()} of ${total.toLocaleString()})`
+        : `Filtering loaded items (${loaded.toLocaleString()} loaded)`;
+    }
+    return "";
+  }
+
+  if (loaded <= 0 && props.rows.length === 0) return "";
+
+  if (props.hasMore) {
+    if (total != null && total > loaded) {
+      return `${loaded.toLocaleString()} of ${total.toLocaleString()} loaded`;
+    }
+    return `${loaded.toLocaleString()} loaded`;
+  }
+
+  const count = total != null && total > 0 ? total : loaded;
+  return count === 1 ? "1 item" : `${count.toLocaleString()} items`;
 });
 
 const emit = defineEmits<{
@@ -322,6 +372,7 @@ const emit = defineEmits<{
   (e: "files-dropped", payload: { files: File[]; folderCount: number }): void;
   (e: "drop-rejected", reason: DropOverlayRejectReason): void;
   (e: "clear-filter"): void;
+  (e: "load-more"): void;
 }>();
 
 const selected = useModel(props, "selected");
@@ -334,6 +385,23 @@ const tablePagination = ref({
   sortBy: "name",
   descending: false,
 });
+
+function onVirtualScroll(details: {
+  index: number;
+  from: number;
+  to: number;
+  direction: "increase" | "decrease";
+}) {
+  if (!props.hasMore || props.loading || props.loadingMore) return;
+  if (details.direction === "decrease") return;
+
+  const last = props.rows.length - 1;
+  if (last < 0) return;
+
+  if (details.to >= last - FILE_BROWSER_LOAD_MORE_THRESHOLD) {
+    emit("load-more");
+  }
+}
 
 const dragCounter = ref(0);
 const isFileDragSession = ref(false);
@@ -498,6 +566,65 @@ onBeforeUnmount(() => {
   width: 100%;
 }
 
+/* Full-width pulse/glow — activity only, not left→right progress. */
+.file-table-progress {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  z-index: 5;
+  overflow: hidden;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--q-primary) 22%, transparent);
+}
+
+.file-table-progress::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 1px;
+  background: var(--q-primary);
+  opacity: 0.35;
+  box-shadow: 0 0 8px color-mix(in srgb, var(--q-primary) 55%, transparent);
+  animation: file-table-progress-pulse 1.1s ease-in-out infinite;
+}
+
+.file-table-progress--more::after {
+  animation-duration: 1.35s;
+}
+
+@keyframes file-table-progress-pulse {
+  0%,
+  100% {
+    opacity: 0.28;
+    box-shadow: 0 0 4px color-mix(in srgb, var(--q-primary) 30%, transparent);
+  }
+  50% {
+    opacity: 0.95;
+    box-shadow: 0 0 10px color-mix(in srgb, var(--q-primary) 65%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .file-table-progress::after {
+    animation: none;
+    opacity: 0.7;
+    box-shadow: none;
+  }
+}
+
+.file-browser-table--busy {
+  opacity: 0.72;
+  transition: opacity 0.15s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .file-browser-table--busy {
+    transition: none;
+  }
+}
+
 .file-table-wrap :deep(.file-browser-table--fill) {
   flex: 1 1 auto;
   min-height: 0;
@@ -516,6 +643,35 @@ onBeforeUnmount(() => {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
+}
+
+/* Fixed column model: Name flexes; Date / Type / Size stay put across folders. */
+.file-table-wrap :deep(.file-browser-table table) {
+  table-layout: fixed;
+  width: 100%;
+}
+
+.file-table-wrap :deep(.file-browser-table th:first-child),
+.file-table-wrap :deep(.file-browser-table td.file-col-select),
+.file-table-wrap :deep(.file-browser-table .q-table--col-auto-width) {
+  width: 44px !important;
+  max-width: 44px;
+  min-width: 44px;
+  padding: 0 !important;
+  text-align: center;
+  vertical-align: middle;
+}
+
+/* Same checkbox geometry in header + body (Quasar dense hit-area can look offset). */
+.file-table-wrap :deep(.file-browser-table th:first-child .q-checkbox),
+.file-table-wrap :deep(.file-browser-table td.file-col-select .q-checkbox) {
+  margin: 0 auto;
+}
+
+.file-table-wrap :deep(.file-browser-table th:first-child .q-checkbox__inner),
+.file-table-wrap
+  :deep(.file-browser-table td.file-col-select .q-checkbox__inner) {
+  margin: 0 auto;
 }
 
 .file-table-wrap :deep(.file-browser-table--fill thead tr th) {
@@ -789,15 +945,26 @@ onBeforeUnmount(() => {
   }
 }
 
+.file-name-cell {
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+}
+
+.file-name-icon {
+  flex: 0 0 auto;
+}
+
 .ellipsis {
-  max-width: 420px;
+  min-width: 0;
+  flex: 1 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .file-name-label {
-  display: inline-block;
+  display: block;
   vertical-align: bottom;
 }
 

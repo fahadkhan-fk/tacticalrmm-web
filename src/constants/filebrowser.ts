@@ -7,5 +7,10 @@ export const MAX_DOWNLOAD_QUEUE_ITEMS = 100;
 export const MAX_ARCHIVE_PATHS = 100;
 export const ARCHIVE_PREPARE_TIMEOUT_MS = 3_600_000;
 
+/** Soft cap for infinite-scroll accumulation in one folder view. */
+export const FILE_BROWSER_MAX_LOADED_ITEMS = 10_000;
+/** How close to the last visible row (count) before fetching the next page. */
+export const FILE_BROWSER_LOAD_MORE_THRESHOLD = 40;
+
 export const FILE_BROWSER_MAX_NAME_LENGTH = 255;
 export const FILE_BROWSER_INVALID_NAME_CHARS = /[\\/:*?"<>|\x00-\x1f]/;
