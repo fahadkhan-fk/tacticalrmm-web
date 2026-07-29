@@ -84,18 +84,6 @@ export function parseSizeLabelToBytes(size?: string): number {
   return Number.isFinite(raw) && raw >= 0 ? raw : 0;
 }
 
-export function defaultFileBrowserRootPath(platform: string): string {
-  switch ((platform || "").toLowerCase()) {
-    case "windows":
-      return "C:\\Users\\Public";
-    case "darwin":
-      return "/Users";
-    case "linux":
-    default:
-      return "/";
-  }
-}
-
 export function isLikelyWindowsPath(path: string): boolean {
   const trimmed = (path || "").trim();
   return /^[A-Za-z]:[\\/]/.test(trimmed) || trimmed.startsWith("\\\\");

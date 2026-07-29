@@ -231,7 +231,6 @@ import type {
 } from "@/types/fileTransfer";
 import { bytes2Human } from "@/utils/format";
 import {
-  defaultFileBrowserRootPath,
   dropRejectToastMessage,
   fileListToArray,
   classifyDownloadSelection,
@@ -529,25 +528,25 @@ function resetNavigationHistory(path: string) {
 }
 
 function initializeRootPath() {
-  const root = defaultFileBrowserRootPath(props.agentPlatform);
-  currentPath.value = root;
-  resetNavigationHistory(root);
+  currentPath.value = "";
+  history.value = [];
+  historyIndex.value = 0;
 }
 
 async function refresh() {
   const path = normalizeNavPath(currentPath.value.trim());
-  if (!path) {
-    listError.value = "Path is required";
-    rows.value = [];
-    resetListPagingState();
-    return;
-  }
 
   const previousPath = currentPath.value;
+  const requestingDefault = !path;
   const pathChanged =
-    !previousPath || !pathsEqual(previousPath, path) || rows.value.length === 0;
+    !previousPath ||
+    !pathsEqual(previousPath, path) ||
+    rows.value.length === 0 ||
+    requestingDefault;
 
-  currentPath.value = path;
+  if (path) {
+    currentPath.value = path;
+  }
 
   const seq = ++loadSeq;
   loading.value = true;
@@ -572,7 +571,16 @@ async function refresh() {
     );
     if (seq !== loadSeq) return;
 
-    currentPath.value = data.path || path;
+    const resolvedPath = (data.path || path || "").trim();
+    if (!resolvedPath) {
+      throw new Error("Agent did not return a browsable path");
+    }
+
+    currentPath.value = resolvedPath;
+    if (requestingDefault || history.value.length === 0) {
+      resetNavigationHistory(resolvedPath);
+    }
+
     rows.value = mapApiItemsToFileBrowserItems(
       data.items ?? [],
       agentPlatform.value,
