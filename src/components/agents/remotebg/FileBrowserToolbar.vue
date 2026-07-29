@@ -120,7 +120,9 @@
         <span
           v-if="showFilterCount"
           class="toolbar-filter-count"
-          :class="{ 'toolbar-filter-count--stale': listingLoading }"
+          :class="{
+            'toolbar-filter-count--stale': listingLoading || filterSearching,
+          }"
           aria-live="polite"
         >
           {{ filterCountLabel }}
@@ -142,7 +144,13 @@
           @keydown="onSearchKeydown"
         >
           <template #prepend>
-            <q-icon name="search" size="18px" />
+            <q-spinner
+              v-if="filterSearching || (listingLoading && filterActive)"
+              color="primary"
+              size="16px"
+              aria-hidden="true"
+            />
+            <q-icon v-else name="search" size="18px" />
           </template>
         </q-input>
       </div>
@@ -176,6 +184,7 @@ const props = withDefaults(
     filterMatchCount?: number;
     filterTotalCount?: number;
     listingLoading?: boolean;
+    filterSearching?: boolean;
   }>(),
   {
     showTransfers: false,
@@ -184,6 +193,7 @@ const props = withDefaults(
     filterMatchCount: 0,
     filterTotalCount: 0,
     listingLoading: false,
+    filterSearching: false,
   },
 );
 
@@ -213,9 +223,17 @@ const filterActive = computed(() => (props.search ?? "").trim().length > 0);
 const showFilterCount = computed(() => filterActive.value);
 
 const filterCountLabel = computed(() => {
+  if (props.filterSearching) {
+    return "Searching this folder…";
+  }
   const match = props.filterMatchCount ?? 0;
   const total = props.filterTotalCount ?? 0;
-  return `${match} of ${total} items`;
+  if (total > 0 && match !== total) {
+    return `${match.toLocaleString()} of ${total.toLocaleString()} matches`;
+  }
+  if (total === 1) return "1 match";
+  if (total > 1) return `${total.toLocaleString()} matches`;
+  return "0 matches";
 });
 
 const pausedTooltip = computed(() =>

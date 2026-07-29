@@ -332,6 +332,7 @@ const props = withDefaults(
     listTotal?: number | null;
     hasMore?: boolean;
     loadingMore?: boolean;
+    filterActive?: boolean;
   }>(),
   {
     dropEnabled: false,
@@ -344,6 +345,7 @@ const props = withDefaults(
     listTotal: null,
     hasMore: false,
     loadingMore: false,
+    filterActive: false,
   },
 );
 
@@ -360,8 +362,7 @@ const showClearFilterAction = computed(
     showEmptyState.value &&
     !props.loading &&
     !props.emptyIsError &&
-    !!props.filterQuery &&
-    props.folderItemCount > 0,
+    props.filterActive,
 );
 
 const footerLabel = computed(() => {
@@ -371,13 +372,17 @@ const footerLabel = computed(() => {
   const total =
     props.listTotal != null && props.listTotal >= 0 ? props.listTotal : null;
 
-  if (props.filterQuery) {
+  if (props.filterActive) {
     if (props.hasMore || props.loadingMore) {
-      return total != null
-        ? `Filtering loaded items (${loaded.toLocaleString()} of ${total.toLocaleString()})`
-        : `Filtering loaded items (${loaded.toLocaleString()} loaded)`;
+      if (total != null && total > loaded) {
+        return `${loaded.toLocaleString()} of ${total.toLocaleString()} matches loaded`;
+      }
+      return `${loaded.toLocaleString()} matches loaded`;
     }
-    return "";
+    if (total != null && total > 0) {
+      return total === 1 ? "1 match" : `${total.toLocaleString()} matches`;
+    }
+    return loaded === 1 ? "1 match" : `${loaded.toLocaleString()} matches`;
   }
 
   if (loaded <= 0 && props.rows.length === 0) return "";

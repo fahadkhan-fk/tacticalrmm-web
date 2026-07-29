@@ -418,11 +418,17 @@ export async function fetchAgentFiles(
   page = 1,
   pageSize = FILE_BROWSER_DEFAULT_PAGE_SIZE,
   platform,
+  filter = "",
 ) {
   const normalizedPath = normalizeAgentListPath(path, platform);
+  const params = { path: normalizedPath, page, page_size: pageSize };
+  const nameFilter = typeof filter === "string" ? filter.trim() : "";
+  if (nameFilter) {
+    params.filter = nameFilter;
+  }
   try {
     const { data } = await axios.get(`${baseUrl}/${agent_id}/files/`, {
-      params: { path: normalizedPath, page, page_size: pageSize },
+      params,
     });
     return data;
   } catch (e) {
@@ -431,16 +437,12 @@ export async function fetchAgentFiles(
   }
 }
 
-/**
- * Fetches every page until has_more is false.
- * File Browser UI uses paged fetchAgentFiles + infinite scroll instead;
- * keep this helper for tooling / one-shot full dumps only.
- */
 export async function fetchAgentFilesAll(
   agent_id,
   path,
   pageSize = FILE_BROWSER_DEFAULT_PAGE_SIZE,
   platform,
+  filter = "",
 ) {
   const normalizedPath = normalizeAgentListPath(path, platform);
   let page = 1;
@@ -454,6 +456,7 @@ export async function fetchAgentFilesAll(
       page,
       pageSize,
       platform,
+      filter,
     );
     lastResponse = data;
     combinedItems = combinedItems.concat(data.items ?? []);

@@ -30,9 +30,10 @@
       :has-upload-path="hasUploadPath"
       :selected-count="selectedRows.length"
       :search="search"
-      :filter-match-count="filteredRows.length"
-      :filter-total-count="rows.length"
-      :listing-loading="loading"
+      :filter-match-count="filterLoadedCount"
+      :filter-total-count="filterTotalCount"
+      :listing-loading="listingBusy"
+      :filter-searching="filterSearching"
       :show-transfers="showTransfersIndicator"
       :transfers-label="transfersIndicatorLabel"
       :paused-count="pausedTransferCount"
@@ -109,6 +110,7 @@
       :list-total="listTotal"
       :has-more="listHasMore"
       :loading-more="loadingMore"
+      :filter-active="!!committedFilter"
       @row-dblclick="onRowDoubleClick"
       @open-folder="openFolder"
       @download="downloadFromContext"
@@ -118,7 +120,7 @@
       @copy-path="copyPathFromContext"
       @files-dropped="onFilesDropped"
       @drop-rejected="onDropRejected"
-      @clear-filter="clearFolderFilter"
+      @clear-filter="clearFilterFromEmptyState"
       @load-more="loadMoreRows"
     />
 
@@ -195,6 +197,7 @@ import {
   MAX_UPLOAD_QUEUE_ITEMS,
   FILE_BROWSER_MAX_LOADED_ITEMS,
   FILE_BROWSER_LOAD_MORE_THRESHOLD,
+  FILE_BROWSER_FILTER_DEBOUNCE_MS,
 } from "@/constants/filebrowser";
 import { FILE_TRANSFER_DEFAULT_CHUNK_SIZE } from "@/constants/fileTransfer";
 import type {
@@ -231,12 +234,12 @@ import {
   defaultFileBrowserRootPath,
   dropRejectToastMessage,
   fileListToArray,
-  filterFileBrowserRowsByName,
   classifyDownloadSelection,
   deriveArchiveDownloadName,
   getFileBrowserErrorMessage,
   isDuplicateNameError,
   getListFilesErrorMessage,
+  normalizeFileBrowserFilterQuery,
   isListFilesAgentOfflineError,
   isListFilesPermissionError,
   isDownloadQueueItemActive,
@@ -247,7 +250,6 @@ import {
   mapApiItemToFileBrowserItem,
   mapApiItemsToFileBrowserItems,
   normalizeAgentListPath,
-  normalizeFileBrowserFilterQuery,
   type DropOverlayRejectReason,
   type UploadConflictAction,
 } from "@/utils/filebrowser";
@@ -277,6 +279,8 @@ const loading = ref(false);
 const listError = ref<string | null>(null);
 const currentPath = ref("");
 const search = ref("");
+const committedFilter = ref("");
+let filterDebounceTimer: ReturnType<typeof window.setTimeout> | null = null;
 const selectedRows = ref<FileBrowserItem[]>([]);
 const toolbarRef = ref<{ focusSearch: () => void } | null>(null);
 const rootRef = ref<HTMLElement | null>(null);
@@ -421,29 +425,69 @@ const uploadLimitsCaption = computed(
     `No file size limit · Up to ${MAX_UPLOAD_FILES_PER_SELECTION} files per selection`,
 );
 
-const filteredRows = computed(() =>
-  filterFileBrowserRowsByName(rows.value, search.value),
-);
+const filteredRows = computed(() => rows.value);
 
 const activeFilterQuery = computed(() =>
   normalizeFileBrowserFilterQuery(search.value),
 );
 
+const filterSearching = computed(() => {
+  const pending = normalizeFileBrowserFilterQuery(search.value);
+  return pending !== committedFilter.value;
+});
+
+const listingBusy = computed(
+  () => loading.value || (filterSearching.value && !!activeFilterQuery.value),
+);
+
+const filterLoadedCount = computed(() => rows.value.length);
+
+const filterTotalCount = computed(() => {
+  if (listTotal.value != null && listTotal.value >= 0) {
+    return listTotal.value;
+  }
+  return rows.value.length;
+});
+
 const tableNoDataLabel = computed(() => {
-  // Loading uses the table spinner — never treat in-flight refresh as no-match.
-  if (loading.value) return "";
+  if (loading.value || filterSearching.value) return "";
   if (listError.value) return listError.value;
-  if (activeFilterQuery.value && rows.value.length > 0) {
-    if (listHasMore.value) {
-      return `No files or folders match “${activeFilterQuery.value}” in the ${rows.value.length.toLocaleString()} loaded items`;
-    }
-    return `No files or folders match “${activeFilterQuery.value}”`;
+  if (committedFilter.value) {
+    return `No files or folders match “${committedFilter.value}”`;
   }
   return "Folder is empty";
 });
 
+function cancelFilterDebounce() {
+  if (filterDebounceTimer != null) {
+    window.clearTimeout(filterDebounceTimer);
+    filterDebounceTimer = null;
+  }
+}
+
 function clearFolderFilter() {
-  if (search.value) search.value = "";
+  cancelFilterDebounce();
+  search.value = "";
+  committedFilter.value = "";
+}
+
+function clearFilterFromEmptyState() {
+  cancelFilterDebounce();
+  if (search.value !== "") {
+    search.value = "";
+    return;
+  }
+  if (committedFilter.value !== "") {
+    applyCommittedFilter("");
+  }
+}
+
+function applyCommittedFilter(nextRaw: string) {
+  const next = normalizeFileBrowserFilterQuery(nextRaw);
+  if (next === committedFilter.value) return;
+  committedFilter.value = next;
+  selectedRows.value = [];
+  void refresh();
 }
 
 function resetListPagingState() {
@@ -524,6 +568,7 @@ async function refresh() {
       1,
       FILE_BROWSER_DEFAULT_PAGE_SIZE,
       agentPlatform.value,
+      committedFilter.value,
     );
     if (seq !== loadSeq) return;
 
@@ -568,7 +613,9 @@ async function loadMoreRows() {
     listSoftCapped.value = true;
     listHasMore.value = false;
     notifyInfo(
-      `Showing the first ${FILE_BROWSER_MAX_LOADED_ITEMS.toLocaleString()} items in this folder.`,
+      committedFilter.value
+        ? `Showing the first ${FILE_BROWSER_MAX_LOADED_ITEMS.toLocaleString()} matches in this folder.`
+        : `Showing the first ${FILE_BROWSER_MAX_LOADED_ITEMS.toLocaleString()} items in this folder.`,
     );
     return;
   }
@@ -587,6 +634,7 @@ async function loadMoreRows() {
       nextPage,
       FILE_BROWSER_DEFAULT_PAGE_SIZE,
       agentPlatform.value,
+      committedFilter.value,
     );
     if (seq !== loadSeq) return;
 
@@ -604,7 +652,9 @@ async function loadMoreRows() {
       listSoftCapped.value = true;
       listHasMore.value = false;
       notifyInfo(
-        `Showing the first ${FILE_BROWSER_MAX_LOADED_ITEMS.toLocaleString()} items in this folder.`,
+        committedFilter.value
+          ? `Showing the first ${FILE_BROWSER_MAX_LOADED_ITEMS.toLocaleString()} matches in this folder.`
+          : `Showing the first ${FILE_BROWSER_MAX_LOADED_ITEMS.toLocaleString()} items in this folder.`,
       );
     }
   } catch (err: unknown) {
@@ -627,6 +677,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  cancelFilterDebounce();
   window.removeEventListener("keydown", onGlobalFindShortcut);
 });
 
@@ -639,8 +690,21 @@ watch(
   },
 );
 
-watch(activeFilterQuery, () => {
-  if (selectedRows.value.length) selectedRows.value = [];
+watch(search, (value) => {
+  const next = normalizeFileBrowserFilterQuery(value);
+  if (!next) {
+    cancelFilterDebounce();
+    if (committedFilter.value !== "") {
+      applyCommittedFilter("");
+    }
+    return;
+  }
+  cancelFilterDebounce();
+  filterDebounceTimer = window.setTimeout(() => {
+    filterDebounceTimer = null;
+    if (normalizeFileBrowserFilterQuery(search.value) !== next) return;
+    applyCommittedFilter(next);
+  }, FILE_BROWSER_FILTER_DEBOUNCE_MS);
 });
 
 watch(
@@ -657,11 +721,13 @@ watch(
 );
 
 watch(
-  [loadingMore, listHasMore, filteredRows, loading],
+  [loadingMore, listHasMore, filteredRows, loading, committedFilter],
   () => {
+    if (committedFilter.value) return;
     if (loading.value || loadingMore.value || !listHasMore.value) return;
     if (filteredRows.value.length > FILE_BROWSER_LOAD_MORE_THRESHOLD) return;
     window.setTimeout(() => {
+      if (committedFilter.value) return;
       if (loading.value || loadingMore.value || !listHasMore.value) return;
       if (filteredRows.value.length > FILE_BROWSER_LOAD_MORE_THRESHOLD) return;
       void loadMoreRows();
