@@ -107,7 +107,7 @@ export type UploadQueueStatus =
 
 export interface UploadQueueItem {
   id: string;
-  file: File;
+  file?: File;
   name: string;
   sizeLabel: string;
   sizeBytes: number;
@@ -120,6 +120,22 @@ export interface UploadQueueItem {
   errorMessage?: string;
   sessionId?: string;
   hidden?: boolean;
+  expiresAt?: string;
+  recoveryHint?: TransferRecoveryHint;
+  uploadFileIdentity?: UploadFileIdentity;
+}
+
+export type TransferRecoveryHint =
+  | "ready"
+  | "needs_file"
+  | "needs_destination"
+  | "archive_preparing"
+  | "non_resumable";
+
+export interface UploadFileIdentity {
+  name: string;
+  size: number;
+  lastModified: number;
 }
 
 export type DownloadQueueStatus =
@@ -143,6 +159,11 @@ export interface DownloadQueueItem {
   errorMessage?: string;
   sessionId?: string;
   hidden?: boolean;
+  expiresAt?: string;
+  recoveryHint?: TransferRecoveryHint;
+  committedOffset?: number;
+  totalSize?: number;
+  chunkSize?: number;
 }
 
 export type DownloadSelectionMode = "none" | "single" | "sequential" | "zip";

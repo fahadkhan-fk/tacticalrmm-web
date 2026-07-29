@@ -71,6 +71,13 @@
           >
             {{ item.errorMessage }}
           </q-item-label>
+          <q-item-label
+            v-else-if="item.status === 'paused' && pausedCaption(item)"
+            caption
+            class="download-queue-item-meta"
+          >
+            {{ pausedCaption(item) }}
+          </q-item-label>
           <div
             v-if="showItemProgress(item)"
             class="download-progress-wrap q-mt-xs"
@@ -126,6 +133,7 @@
               size="sm"
               color="primary"
               label="Resume"
+              :disable="item.recoveryHint === 'non_resumable'"
               @click="emit('resume', item.id)"
             />
             <q-btn
@@ -184,6 +192,7 @@ import type {
   DownloadQueueItem,
   DownloadQueueStatus,
 } from "@/types/filebrowser";
+import { formatResumeWindowCaption } from "@/services/fileTransfer/transferQueuePersist";
 import {
   canDismissDownloadQueueItem,
   downloadStatusBadgeColor,
@@ -209,6 +218,13 @@ const emit = defineEmits<{
   (e: "hide", id: string): void;
 }>();
 
+function pausedCaption(item: DownloadQueueItem): string | null {
+  const parts: string[] = [];
+  if (item.errorMessage) parts.push(item.errorMessage);
+  const window = formatResumeWindowCaption(item.expiresAt);
+  if (window) parts.push(window);
+  return parts.length ? parts.join(" · ") : null;
+}
 const canClearFinished = computed(() =>
   props.items.some((item) => canDismissDownloadQueueItem(item.status)),
 );
@@ -291,6 +307,11 @@ function progressColor(status: DownloadQueueStatus): string {
 
 .download-queue-item-error {
   color: rgba(244, 67, 54, 0.9) !important;
+}
+
+.download-queue-item-meta {
+  white-space: normal;
+  opacity: 0.8;
 }
 
 .download-queue-list--dark .download-queue-item-error {

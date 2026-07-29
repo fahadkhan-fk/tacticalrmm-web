@@ -11,6 +11,7 @@ import type {
   FileTransferInitDownloadResponse,
   FileTransferInitUploadResponse,
   FileTransferUploadChunkResponse,
+  ResumableFileTransfersResponse,
 } from "@/types/fileTransfer";
 
 const baseUrl = "/agents";
@@ -247,4 +248,14 @@ export async function cancelAgentFileUpload(
     { reason },
     { timeout: 30_000, ...transferRequestConfig },
   );
+}
+
+export async function listAgentFileTransfers(
+  agentId: string,
+): Promise<ResumableFileTransfersResponse> {
+  const { data } = await axios.get<ResumableFileTransfersResponse>(
+    `${baseUrl}/${agentId}/files/transfers/`,
+    { timeout: 30_000, ...transferRequestConfig },
+  );
+  return data;
 }

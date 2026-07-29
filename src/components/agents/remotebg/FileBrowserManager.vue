@@ -24,6 +24,12 @@
       multiple
       @change="onFileInputChange"
     />
+    <input
+      ref="resumeUploadFileInputRef"
+      type="file"
+      class="hidden-file-input"
+      @change="onResumeUploadFileSelected"
+    />
 
     <FileBrowserToolbar
       ref="toolbarRef"
@@ -59,6 +65,7 @@
       @dismiss="dismissUploadItem"
       @pause="pauseUploadItem"
       @resume="resumeUploadItem"
+      @select-file="selectFileToResumeUpload"
       @cancel="cancelUploadItem"
       @hide="hideUploadItem"
     />
@@ -164,10 +171,6 @@ import { computed, onBeforeUnmount, onMounted, ref, toRef, watch } from "vue";
 import { copyToClipboard, useQuasar } from "quasar";
 
 import {
-  cancelAgentFileDownload,
-  cancelAgentFileUpload,
-} from "@/api/filebrowser";
-import {
   createAgentFileFolder,
   deleteAgentFiles,
   fetchAgentFileProperties,
@@ -175,6 +178,11 @@ import {
   FILE_BROWSER_DEFAULT_PAGE_SIZE,
   renameAgentFile,
 } from "@/api/agents";
+import {
+  cancelAgentFileDownload,
+  cancelAgentFileUpload,
+  listAgentFileTransfers,
+} from "@/api/filebrowser";
 import FileBrowserDownloadProgress from "@/components/agents/remotebg/FileBrowserDownloadProgress.vue";
 import FileBrowserDownloadQueue from "@/components/agents/remotebg/FileBrowserDownloadQueue.vue";
 import FileBrowserNewFolderModal from "@/components/agents/remotebg/FileBrowserNewFolderModal.vue";
@@ -219,12 +227,21 @@ import {
   archiveDownloadHandleIdbKey,
   archiveDownloadResumeKey,
   clearDownloadResume,
+  clearDownloadResumeBySessionId,
   clearUploadResume,
+  clearUploadResumeBySessionId,
   downloadHandleIdbKey,
-  idbDeleteFileHandle,
   loadDownloadResume,
   loadUploadResume,
 } from "@/services/fileTransfer/resume";
+import {
+  clearTransferPersistence,
+  deleteLocalPausedEntry,
+  matchesUploadFileIdentity,
+  persistDownloadQueueMeta,
+  persistUploadQueueMeta,
+  reconcileResumableTransfers,
+} from "@/services/fileTransfer/transferQueuePersist";
 import type {
   DownloadTransferStatus,
   TransferAbortIntent,
@@ -305,6 +322,8 @@ const deleteDialog = ref(false);
 const deletePendingItems = ref<FileBrowserItem[]>([]);
 
 const fileInputRef = ref<HTMLInputElement | null>(null);
+const resumeUploadFileInputRef = ref<HTMLInputElement | null>(null);
+let resumeUploadTargetId: string | null = null;
 
 const uploadQueue = ref<UploadQueueItem[]>([]);
 const uploadAbortControllers = new Map<string, AbortController>();
@@ -681,6 +700,7 @@ async function loadMoreRows() {
 onMounted(() => {
   initializeRootPath();
   void refresh();
+  void restoreResumableTransfers();
   window.addEventListener("keydown", onGlobalFindShortcut);
 });
 
@@ -695,6 +715,10 @@ watch(
     clearFolderFilter();
     initializeRootPath();
     void refresh();
+    uploadQueue.value = [];
+    downloadQueue.value = [];
+    downloadQueueSummary.value = null;
+    void restoreResumableTransfers();
   },
 );
 
@@ -972,6 +996,9 @@ function revealTransfers() {
         item.status === "queued")
     ) {
       item.hidden = false;
+      if (item.status === "paused") {
+        void persistDownloadQueueMeta(props.agent_id, item);
+      }
     }
   }
   for (const item of uploadQueue.value) {
@@ -982,7 +1009,97 @@ function revealTransfers() {
         item.status === "queued")
     ) {
       item.hidden = false;
+      if (item.status === "paused") {
+        void persistUploadQueueMeta(props.agent_id, item);
+      }
     }
+  }
+}
+
+async function restoreResumableTransfers(): Promise<void> {
+  try {
+    const data = await listAgentFileTransfers(props.agent_id);
+    const { uploads, downloads } = await reconcileResumableTransfers(
+      props.agent_id,
+      data.transfers ?? [],
+    );
+
+    const liveUploadIds = new Set(
+      uploadQueue.value
+        .filter(
+          (i) =>
+            i.status === "uploading" ||
+            i.status === "queued" ||
+            isUploadQueueItemTerminal(i.status),
+        )
+        .map((i) => i.id),
+    );
+    const liveUploadSessions = new Set(
+      uploadQueue.value
+        .map((i) => i.sessionId)
+        .filter((id): id is string => !!id),
+    );
+    for (const restored of uploads) {
+      if (liveUploadIds.has(restored.id)) continue;
+      if (restored.sessionId && liveUploadSessions.has(restored.sessionId)) {
+        continue;
+      }
+      const existingIdx = uploadQueue.value.findIndex(
+        (i) =>
+          i.id === restored.id ||
+          (restored.sessionId && i.sessionId === restored.sessionId),
+      );
+      if (existingIdx >= 0) {
+        if (uploadQueue.value[existingIdx].status === "paused") {
+          uploadQueue.value[existingIdx] = {
+            ...uploadQueue.value[existingIdx],
+            ...restored,
+            file: uploadQueue.value[existingIdx].file,
+          };
+        }
+        continue;
+      }
+      uploadQueue.value.push(restored);
+    }
+
+    const liveDownloadIds = new Set(
+      downloadQueue.value
+        .filter(
+          (i) =>
+            isDownloadQueueItemActive(i.status) ||
+            i.status === "queued" ||
+            isDownloadQueueItemTerminal(i.status),
+        )
+        .map((i) => i.id),
+    );
+    const liveDownloadSessions = new Set(
+      downloadQueue.value
+        .map((i) => i.sessionId)
+        .filter((id): id is string => !!id),
+    );
+    for (const restored of downloads) {
+      if (liveDownloadIds.has(restored.id)) continue;
+      if (restored.sessionId && liveDownloadSessions.has(restored.sessionId)) {
+        continue;
+      }
+      const existingIdx = downloadQueue.value.findIndex(
+        (i) =>
+          i.id === restored.id ||
+          (restored.sessionId && i.sessionId === restored.sessionId),
+      );
+      if (existingIdx >= 0) {
+        if (downloadQueue.value[existingIdx].status === "paused") {
+          downloadQueue.value[existingIdx] = {
+            ...downloadQueue.value[existingIdx],
+            ...restored,
+          };
+        }
+        continue;
+      }
+      downloadQueue.value.push(restored);
+    }
+  } catch (err: unknown) {
+    console.warn("Failed to restore resumable transfers", err);
   }
 }
 
@@ -1136,6 +1253,7 @@ function cancelRemainingDownloads() {
   for (const item of downloadQueue.value) {
     if (item.status === "queued") {
       item.status = "paused";
+      void persistDownloadQueueMeta(props.agent_id, item);
     }
   }
 }
@@ -1326,7 +1444,19 @@ async function runSingleDownload(itemId: string): Promise<void> {
     current.status = "completed";
     current.progress = 1;
     current.hidden = false;
+    const doneSession = current.sessionId;
     current.sessionId = undefined;
+    if (doneSession) {
+      const handleKey =
+        current.kind === "archive" && current.archivePaths?.length
+          ? archiveDownloadHandleIdbKey(props.agent_id, current.archivePaths)
+          : downloadHandleIdbKey(props.agent_id, current.sourcePath);
+      void clearTransferPersistence(props.agent_id, doneSession, {
+        handleKey,
+        localQueueId: current.id,
+      });
+    }
+    deleteLocalPausedEntry(props.agent_id, current.id);
 
     if (result.warnings && result.warnings.length > 0) {
       const shown = result.warnings.slice(0, 5).join("; ");
@@ -1352,7 +1482,25 @@ async function runSingleDownload(itemId: string): Promise<void> {
       current.status = mode === "cancel" ? "cancelled" : "paused";
       current.errorMessage = undefined;
       if (mode === "cancel") {
+        const sid = current.sessionId;
         current.sessionId = undefined;
+        if (sid) {
+          clearDownloadResumeBySessionId(sid);
+          const handleKey =
+            current.kind === "archive" && current.archivePaths?.length
+              ? archiveDownloadHandleIdbKey(
+                  props.agent_id,
+                  current.archivePaths,
+                )
+              : downloadHandleIdbKey(props.agent_id, current.sourcePath);
+          void clearTransferPersistence(props.agent_id, sid, {
+            handleKey,
+            localQueueId: current.id,
+          });
+        }
+        deleteLocalPausedEntry(props.agent_id, current.id);
+      } else {
+        void persistDownloadQueueMeta(props.agent_id, current);
       }
       if (downloadBatchIsSingle.value && downloadQueue.value.length === 1) {
         notifyInfo(
@@ -1461,6 +1609,11 @@ function abortDownloadItem(
   const item = findDownloadItem(id);
   if (item && item.status === "queued") {
     item.status = mode === "cancel" ? "cancelled" : "paused";
+    if (mode === "pause") {
+      void persistDownloadQueueMeta(props.agent_id, item);
+    } else {
+      deleteLocalPausedEntry(props.agent_id, item.id);
+    }
   }
 }
 
@@ -1497,16 +1650,26 @@ async function discardPausedDownload(item: DownloadQueueItem): Promise<void> {
     try {
       await cancelAgentFileDownload(props.agent_id, sessionId, "user");
     } catch {}
+    clearDownloadResumeBySessionId(sessionId);
   }
   item.sessionId = undefined;
   clearDownloadResume(props.agent_id, resumeScopeKey);
-  await idbDeleteFileHandle(handleKey).catch(() => {});
+  await clearTransferPersistence(props.agent_id, sessionId, {
+    handleKey,
+    localQueueId: item.id,
+  });
   notifyInfo("Download cancelled.");
 }
 
 function resumeDownloadItem(id: string) {
   const item = findDownloadItem(id);
   if (!item || item.status !== "paused") return;
+  if (item.recoveryHint === "non_resumable") {
+    notifyWarning(
+      "This download cannot be resumed here. Cancel it to free the server session.",
+    );
+    return;
+  }
   item.hidden = false;
   item.status = "queued";
   item.errorMessage = undefined;
@@ -1517,12 +1680,14 @@ function hideDownloadItem(id: string) {
   const item = findDownloadItem(id);
   if (!item || item.status !== "paused") return;
   item.hidden = true;
+  void persistDownloadQueueMeta(props.agent_id, item);
 }
 
 function hideAllDownloadItems() {
   for (const item of downloadQueue.value) {
     if (item.status === "paused") {
       item.hidden = true;
+      void persistDownloadQueueMeta(props.agent_id, item);
     }
   }
 }
@@ -1905,10 +2070,17 @@ function updateUploadProgress(
 async function runSingleUpload(itemId: string): Promise<void> {
   const item = findUploadItem(itemId);
   if (!item || item.status !== "queued") return;
+  if (!item.file) {
+    item.status = "paused";
+    item.recoveryHint = "needs_file";
+    item.errorMessage = "Select the original file to resume this upload.";
+    return;
+  }
 
   item.status = "uploading";
   item.errorMessage = undefined;
   item.progress = 0;
+  item.recoveryHint = undefined;
 
   const controller = new AbortController();
   const abortIntent: TransferAbortIntent = { mode: "pause" };
@@ -1953,7 +2125,14 @@ async function runSingleUpload(itemId: string): Promise<void> {
     current.status = "completed";
     current.progress = 1;
     current.hidden = false;
+    const doneSession = current.sessionId;
     current.sessionId = undefined;
+    if (doneSession) {
+      void clearTransferPersistence(props.agent_id, doneSession, {
+        localQueueId: current.id,
+      });
+    }
+    deleteLocalPausedEntry(props.agent_id, current.id);
     if (!multiBatch) {
       notifySuccess(`Uploaded "${item.name}"`);
     }
@@ -1967,7 +2146,17 @@ async function runSingleUpload(itemId: string): Promise<void> {
       current.status = mode === "cancel" ? "cancelled" : "paused";
       current.errorMessage = undefined;
       if (mode === "cancel") {
+        const sid = current.sessionId;
         current.sessionId = undefined;
+        if (sid) {
+          clearUploadResumeBySessionId(sid);
+          void clearTransferPersistence(props.agent_id, sid, {
+            localQueueId: current.id,
+          });
+        }
+        deleteLocalPausedEntry(props.agent_id, current.id);
+      } else {
+        void persistUploadQueueMeta(props.agent_id, current);
       }
       if (!multiBatch) {
         notifyInfo(mode === "cancel" ? "Upload cancelled." : "Upload paused.");
@@ -2049,6 +2238,11 @@ function abortUploadItem(id: string, mode: TransferAbortIntent["mode"]): void {
   const item = findUploadItem(id);
   if (item && item.status === "queued") {
     item.status = mode === "cancel" ? "cancelled" : "paused";
+    if (mode === "pause") {
+      void persistUploadQueueMeta(props.agent_id, item);
+    } else {
+      deleteLocalPausedEntry(props.agent_id, item.id);
+    }
   }
 }
 
@@ -2070,28 +2264,93 @@ async function discardPausedUpload(item: UploadQueueItem): Promise<void> {
   item.hidden = false;
   item.errorMessage = undefined;
 
-  const saved = loadUploadResume(
-    props.agent_id,
-    item.file,
-    item.destinationPath,
-  );
-  const sessionId = item.sessionId || saved?.sessionId;
+  let sessionId = item.sessionId;
+  if (!sessionId && item.file) {
+    const saved = loadUploadResume(
+      props.agent_id,
+      item.file,
+      item.destinationPath,
+    );
+    sessionId = saved?.sessionId;
+  }
   if (sessionId) {
     try {
       await cancelAgentFileUpload(props.agent_id, sessionId, "user");
     } catch {}
+    clearUploadResumeBySessionId(sessionId);
+  }
+  if (item.file) {
+    clearUploadResume(props.agent_id, item.file, item.destinationPath);
   }
   item.sessionId = undefined;
-  clearUploadResume(props.agent_id, item.file, item.destinationPath);
+  await clearTransferPersistence(props.agent_id, sessionId, {
+    localQueueId: item.id,
+  });
   notifyInfo("Upload cancelled.");
+}
+
+function selectFileToResumeUpload(id: string) {
+  const item = findUploadItem(id);
+  if (!item || item.status !== "paused") return;
+  resumeUploadTargetId = id;
+  resumeUploadFileInputRef.value?.click();
+}
+
+function onResumeUploadFileSelected(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  const targetId = resumeUploadTargetId;
+  resumeUploadTargetId = null;
+  input.value = "";
+  if (!file || !targetId) return;
+
+  const item = findUploadItem(targetId);
+  if (!item || item.status !== "paused") return;
+
+  if (item.uploadFileIdentity) {
+    if (!matchesUploadFileIdentity(file, item.uploadFileIdentity)) {
+      notifyError(
+        "Selected file does not match the paused upload (name, size, or modified time).",
+      );
+      return;
+    }
+  } else if (
+    file.name !== item.name ||
+    (item.sizeBytes > 0 && file.size !== item.sizeBytes)
+  ) {
+    notifyError(
+      "Selected file does not match the paused upload (name or size).",
+    );
+    return;
+  }
+
+  item.file = file;
+  item.uploadFileIdentity = {
+    name: file.name,
+    size: file.size,
+    lastModified: file.lastModified,
+  };
+  item.sizeBytes = file.size;
+  item.sizeLabel = bytes2Human(file.size);
+  item.recoveryHint = "ready";
+  item.errorMessage = undefined;
+  item.hidden = false;
+  item.status = "queued";
+  void persistUploadQueueMeta(props.agent_id, item);
+  void processUploadQueue();
 }
 
 function resumeUploadItem(id: string) {
   const item = findUploadItem(id);
   if (!item || item.status !== "paused") return;
+  if (!item.file) {
+    selectFileToResumeUpload(id);
+    return;
+  }
   item.hidden = false;
   item.status = "queued";
   item.errorMessage = undefined;
+  item.recoveryHint = undefined;
   void processUploadQueue();
 }
 
@@ -2099,12 +2358,14 @@ function hideUploadItem(id: string) {
   const item = findUploadItem(id);
   if (!item || item.status !== "paused") return;
   item.hidden = true;
+  void persistUploadQueueMeta(props.agent_id, item);
 }
 
 function hideAllUploadItems() {
   for (const item of uploadQueue.value) {
     if (item.status === "paused") {
       item.hidden = true;
+      void persistUploadQueueMeta(props.agent_id, item);
     }
   }
 }

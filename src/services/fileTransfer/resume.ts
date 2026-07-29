@@ -4,6 +4,8 @@ import {
   FILE_TRANSFER_DOWNLOAD_IDB_NAME,
   FILE_TRANSFER_DOWNLOAD_IDB_STORE,
   FILE_TRANSFER_DOWNLOAD_RESUME_LS_KEY,
+  FILE_TRANSFER_IDB_VERSION,
+  FILE_TRANSFER_UI_META_IDB_STORE,
   FILE_TRANSFER_UPLOAD_RESUME_LS_KEY,
 } from "@/constants/fileTransfer";
 
@@ -135,15 +137,72 @@ export function clearDownloadResume(agentId: string, sourcePath: string): void {
   lsSet(FILE_TRANSFER_DOWNLOAD_RESUME_LS_KEY, map);
 }
 
+export function clearUploadResumeBySessionId(sessionId: string): void {
+  const map = lsGet<Record<string, UploadResumeEntry>>(
+    FILE_TRANSFER_UPLOAD_RESUME_LS_KEY,
+  );
+  let changed = false;
+  for (const [key, entry] of Object.entries(map)) {
+    if (entry?.sessionId === sessionId) {
+      delete map[key];
+      changed = true;
+    }
+  }
+  if (changed) lsSet(FILE_TRANSFER_UPLOAD_RESUME_LS_KEY, map);
+}
+
+export function clearDownloadResumeBySessionId(sessionId: string): void {
+  const map = lsGet<Record<string, DownloadResumeEntry>>(
+    FILE_TRANSFER_DOWNLOAD_RESUME_LS_KEY,
+  );
+  let changed = false;
+  for (const [key, entry] of Object.entries(map)) {
+    if (entry?.sessionId === sessionId) {
+      delete map[key];
+      changed = true;
+    }
+  }
+  if (changed) lsSet(FILE_TRANSFER_DOWNLOAD_RESUME_LS_KEY, map);
+}
+
+export function findDownloadResumeScopeKeyBySessionId(
+  agentId: string,
+  sessionId: string,
+): string | null {
+  const map = lsGet<Record<string, DownloadResumeEntry>>(
+    FILE_TRANSFER_DOWNLOAD_RESUME_LS_KEY,
+  );
+  const prefix = `${agentId}:`;
+  for (const [key, entry] of Object.entries(map)) {
+    if (entry?.sessionId === sessionId && key.startsWith(prefix)) {
+      return key.slice(prefix.length);
+    }
+  }
+  return null;
+}
+
 function openTransferIdb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(FILE_TRANSFER_DOWNLOAD_IDB_NAME, 1);
+    const request = indexedDB.open(
+      FILE_TRANSFER_DOWNLOAD_IDB_NAME,
+      FILE_TRANSFER_IDB_VERSION,
+    );
     request.onupgradeneeded = () => {
-      request.result.createObjectStore(FILE_TRANSFER_DOWNLOAD_IDB_STORE);
+      const db = request.result;
+      if (!db.objectStoreNames.contains(FILE_TRANSFER_DOWNLOAD_IDB_STORE)) {
+        db.createObjectStore(FILE_TRANSFER_DOWNLOAD_IDB_STORE);
+      }
+      if (!db.objectStoreNames.contains(FILE_TRANSFER_UI_META_IDB_STORE)) {
+        db.createObjectStore(FILE_TRANSFER_UI_META_IDB_STORE);
+      }
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
   });
+}
+
+export function openFileTransferIdb(): Promise<IDBDatabase> {
+  return openTransferIdb();
 }
 
 export async function idbPutFileHandle(

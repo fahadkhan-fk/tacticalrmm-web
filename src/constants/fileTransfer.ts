@@ -7,3 +7,6 @@ export const FILE_TRANSFER_UPLOAD_RESUME_LS_KEY = "trmm-resume-up";
 export const FILE_TRANSFER_DOWNLOAD_RESUME_LS_KEY = "trmm-resume-dl";
 export const FILE_TRANSFER_DOWNLOAD_IDB_NAME = "trmm-transfer";
 export const FILE_TRANSFER_DOWNLOAD_IDB_STORE = "handles";
+export const FILE_TRANSFER_UI_META_IDB_STORE = "ui_meta";
+export const FILE_TRANSFER_IDB_VERSION = 2;
+export const FILE_TRANSFER_LOCAL_PAUSED_LS_KEY = "trmm-transfer-local-paused";

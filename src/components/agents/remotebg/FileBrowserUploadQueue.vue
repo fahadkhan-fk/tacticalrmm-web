@@ -58,6 +58,13 @@
           <q-item-label caption class="upload-queue-item-meta">{{
             item.sizeLabel
           }}</q-item-label>
+          <q-item-label
+            v-if="item.status === 'paused' && resumeCaption(item)"
+            caption
+            class="upload-queue-item-meta"
+          >
+            {{ resumeCaption(item) }}
+          </q-item-label>
           <div class="upload-progress-wrap q-mt-xs">
             <q-linear-progress
               :value="item.progress"
@@ -104,6 +111,17 @@
             class="row q-gutter-xs q-mt-xs"
           >
             <q-btn
+              v-if="item.recoveryHint === 'needs_file' && !item.file"
+              dense
+              flat
+              no-caps
+              size="sm"
+              color="primary"
+              label="Select file"
+              @click="emit('select-file', item.id)"
+            />
+            <q-btn
+              v-else
               dense
               flat
               no-caps
@@ -165,6 +183,7 @@ import { computed } from "vue";
 import { useQuasar } from "quasar";
 
 import type { UploadQueueItem, UploadQueueStatus } from "@/types/filebrowser";
+import { formatResumeWindowCaption } from "@/services/fileTransfer/transferQueuePersist";
 import {
   isUploadQueueItemTerminal,
   uploadStatusBadgeColor,
@@ -185,10 +204,20 @@ const emit = defineEmits<{
   (e: "dismiss", id: string): void;
   (e: "pause", id: string): void;
   (e: "resume", id: string): void;
+  (e: "select-file", id: string): void;
   (e: "cancel", id: string): void;
   (e: "hide", id: string): void;
 }>();
 
+function resumeCaption(item: UploadQueueItem): string | null {
+  if (item.recoveryHint === "needs_file" && !item.file) {
+    const window = formatResumeWindowCaption(item.expiresAt);
+    return window
+      ? `Select original file to resume · ${window}`
+      : "Select the original file to resume";
+  }
+  return formatResumeWindowCaption(item.expiresAt);
+}
 const canClearFinished = computed(() =>
   props.items.some((item) => isUploadQueueItemTerminal(item.status)),
 );

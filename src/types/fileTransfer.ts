@@ -57,6 +57,25 @@ export interface FileTransferDownloadStatusResponse {
   error: string;
 }
 
+export interface ResumableFileTransfer {
+  session_id: string;
+  operation: "upload" | "download";
+  filename: string;
+  destination_path: string;
+  total_size: number;
+  chunk_size: number;
+  committed_offset: number;
+  status: string;
+  expires_at: string;
+  is_archive: boolean;
+  warnings?: string[];
+  conflict_policy?: "skip" | "replace";
+}
+
+export interface ResumableFileTransfersResponse {
+  transfers: ResumableFileTransfer[];
+}
+
 export interface FileTransferProgress {
   acceptedOffset: number;
   committedOffset: number;
