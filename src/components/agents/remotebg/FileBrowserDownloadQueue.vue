@@ -133,9 +133,15 @@
               size="sm"
               color="primary"
               label="Resume"
-              :disable="item.recoveryHint === 'non_resumable'"
+              :disable="
+                item.recoveryHint === 'non_resumable' || !!item.ownedByOtherTab
+              "
               @click="emit('resume', item.id)"
-            />
+            >
+              <q-tooltip v-if="item.ownedByOtherTab"
+                >Open in another tab</q-tooltip
+              >
+            </q-btn>
             <q-btn
               dense
               flat
@@ -219,6 +225,9 @@ const emit = defineEmits<{
 }>();
 
 function pausedCaption(item: DownloadQueueItem): string | null {
+  if (item.ownedByOtherTab) {
+    return "Open in another tab";
+  }
   const parts: string[] = [];
   if (item.errorMessage) parts.push(item.errorMessage);
   const window = formatResumeWindowCaption(item.expiresAt);

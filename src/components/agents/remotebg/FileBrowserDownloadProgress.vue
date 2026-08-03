@@ -35,8 +35,11 @@
             size="sm"
             color="primary"
             label="Resume"
+            :disable="ownedByOtherTab"
             @click="emit('resume')"
-          />
+          >
+            <q-tooltip v-if="ownedByOtherTab">Open in another tab</q-tooltip>
+          </q-btn>
           <q-btn
             dense
             flat
@@ -101,6 +104,7 @@ const props = defineProps<{
   status: DownloadTransferStatus;
   errorMessage?: string;
   buildingArchive?: boolean;
+  ownedByOtherTab?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -150,7 +154,7 @@ const statusLabel = computed(() => {
     case "failed":
       return props.errorMessage || "Download failed";
     case "paused":
-      return "Paused";
+      return props.ownedByOtherTab ? "Open in another tab" : "Paused";
     case "cancelled":
       return "Cancelled";
     default:

@@ -123,6 +123,7 @@ export interface UploadQueueItem {
   expiresAt?: string;
   recoveryHint?: TransferRecoveryHint;
   uploadFileIdentity?: UploadFileIdentity;
+  ownedByOtherTab?: boolean;
 }
 
 export type TransferRecoveryHint =
@@ -164,6 +165,7 @@ export interface DownloadQueueItem {
   committedOffset?: number;
   totalSize?: number;
   chunkSize?: number;
+  ownedByOtherTab?: boolean;
 }
 
 export type DownloadSelectionMode = "none" | "single" | "sequential" | "zip";

@@ -118,8 +118,13 @@
               size="sm"
               color="primary"
               label="Select file"
+              :disable="!!item.ownedByOtherTab"
               @click="emit('select-file', item.id)"
-            />
+            >
+              <q-tooltip v-if="item.ownedByOtherTab"
+                >Open in another tab</q-tooltip
+              >
+            </q-btn>
             <q-btn
               v-else
               dense
@@ -128,8 +133,13 @@
               size="sm"
               color="primary"
               label="Resume"
+              :disable="!!item.ownedByOtherTab"
               @click="emit('resume', item.id)"
-            />
+            >
+              <q-tooltip v-if="item.ownedByOtherTab"
+                >Open in another tab</q-tooltip
+              >
+            </q-btn>
             <q-btn
               dense
               flat
@@ -210,6 +220,9 @@ const emit = defineEmits<{
 }>();
 
 function resumeCaption(item: UploadQueueItem): string | null {
+  if (item.ownedByOtherTab) {
+    return "Open in another tab";
+  }
   if (item.recoveryHint === "needs_file" && !item.file) {
     const window = formatResumeWindowCaption(item.expiresAt);
     return window

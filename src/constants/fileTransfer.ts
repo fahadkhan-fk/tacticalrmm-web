@@ -10,3 +10,6 @@ export const FILE_TRANSFER_DOWNLOAD_IDB_STORE = "handles";
 export const FILE_TRANSFER_UI_META_IDB_STORE = "ui_meta";
 export const FILE_TRANSFER_IDB_VERSION = 2;
 export const FILE_TRANSFER_LOCAL_PAUSED_LS_KEY = "trmm-transfer-local-paused";
+export const FILE_TRANSFER_TAB_SYNC_CHANNEL = "trmm-file-transfer-tab-sync";
+export const FILE_TRANSFER_TAB_SYNC_HEARTBEAT_MS = 5_000;
+export const FILE_TRANSFER_TAB_SYNC_STALE_MS = 15_000;

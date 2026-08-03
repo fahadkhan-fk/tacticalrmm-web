@@ -80,6 +80,7 @@
         visibleSingleDownloadItem.kind === 'archive' &&
         visibleSingleDownloadItem.status === 'initializing'
       "
+      :owned-by-other-tab="!!visibleSingleDownloadItem.ownedByOtherTab"
       @pause="pauseDownloadItem(visibleSingleDownloadItem.id)"
       @resume="resumeDownloadItem(visibleSingleDownloadItem.id)"
       @cancel="cancelDownloadItem(visibleSingleDownloadItem.id)"
@@ -242,6 +243,13 @@ import {
   persistUploadQueueMeta,
   reconcileResumableTransfers,
 } from "@/services/fileTransfer/transferQueuePersist";
+import {
+  createTransferTabSync,
+  transferClaimKey,
+  type TransferReleaseReason,
+  type TransferTabSync,
+  type TransferTabSyncEvent,
+} from "@/services/fileTransfer/transferTabSync";
 import type {
   DownloadTransferStatus,
   TransferAbortIntent,
@@ -341,6 +349,21 @@ let downloadProcessorRunning = false;
 let downloadIdSeq = 0;
 let downloadStopAllRequested = false;
 let loadSeq = 0;
+let restoreSeq = 0;
+const uploadClaimKeys = new Map<string, string>();
+const downloadClaimKeys = new Map<string, string>();
+let tabSyncHandler: ((event: TransferTabSyncEvent) => void) | null = null;
+let tabSync: TransferTabSync | null = null;
+let ownershipRefreshTimer: ReturnType<typeof setInterval> | null = null;
+
+function getTabSync(): TransferTabSync {
+  if (!tabSync) {
+    tabSync = createTransferTabSync((event) => {
+      tabSyncHandler?.(event);
+    });
+  }
+  return tabSync;
+}
 
 const mutationSaving = ref(false);
 const loadingMore = ref(false);
@@ -698,27 +721,47 @@ async function loadMoreRows() {
 }
 
 onMounted(() => {
+  tabSyncHandler = onTransferTabSyncEvent;
+  tabSync?.close();
+  tabSync = createTransferTabSync((event) => {
+    tabSyncHandler?.(event);
+  });
   initializeRootPath();
   void refresh();
-  void restoreResumableTransfers();
+  const seq = ++restoreSeq;
+  void restoreResumableTransfers(seq);
+  getTabSync().query();
+  ownershipRefreshTimer = setInterval(() => {
+    applyRemoteOwnershipFlags();
+  }, 5_000);
   window.addEventListener("keydown", onGlobalFindShortcut);
 });
 
 onBeforeUnmount(() => {
   cancelFilterDebounce();
   window.removeEventListener("keydown", onGlobalFindShortcut);
+  if (ownershipRefreshTimer) {
+    clearInterval(ownershipRefreshTimer);
+    ownershipRefreshTimer = null;
+  }
+  tabSyncHandler = null;
+  tabSync?.close();
+  tabSync = null;
 });
 
 watch(
   () => [props.agent_id, props.agentPlatform] as const,
   () => {
+    const seq = ++restoreSeq;
     clearFolderFilter();
     initializeRootPath();
     void refresh();
+    releaseAllLocalClaims("unmount");
     uploadQueue.value = [];
     downloadQueue.value = [];
     downloadQueueSummary.value = null;
-    void restoreResumableTransfers();
+    void restoreResumableTransfers(seq);
+    getTabSync().query();
   },
 );
 
@@ -1016,13 +1059,155 @@ function revealTransfers() {
   }
 }
 
-async function restoreResumableTransfers(): Promise<void> {
+function claimKeyForUpload(item: UploadQueueItem): string {
+  return transferClaimKey(props.agent_id, {
+    sessionId: item.sessionId,
+    queueId: item.id,
+  });
+}
+
+function claimKeyForDownload(item: DownloadQueueItem): string {
+  return transferClaimKey(props.agent_id, {
+    sessionId: item.sessionId,
+    queueId: item.id,
+  });
+}
+
+function itemMatchesClaimKey(
+  item: { id: string; sessionId?: string },
+  key: string,
+): boolean {
+  if (
+    transferClaimKey(props.agent_id, {
+      sessionId: item.sessionId,
+      queueId: item.id,
+    }) === key
+  ) {
+    return true;
+  }
+  return transferClaimKey(props.agent_id, { queueId: item.id }) === key;
+}
+
+function applyRemoteOwnershipFlags(): void {
+  for (const item of uploadQueue.value) {
+    if (item.status === "paused" || item.status === "queued") {
+      const held = uploadClaimKeys.get(item.id);
+      item.ownedByOtherTab =
+        !held && getTabSync().isRemotelyOwned(claimKeyForUpload(item));
+    } else if (isUploadQueueItemActive(item.status)) {
+      item.ownedByOtherTab = false;
+    }
+  }
+  for (const item of downloadQueue.value) {
+    if (item.status === "paused" || item.status === "queued") {
+      const held = downloadClaimKeys.get(item.id);
+      item.ownedByOtherTab =
+        !held && getTabSync().isRemotelyOwned(claimKeyForDownload(item));
+    } else if (isDownloadQueueItemActive(item.status)) {
+      item.ownedByOtherTab = false;
+    }
+  }
+}
+
+function releaseUploadClaim(
+  itemId: string,
+  reason: TransferReleaseReason,
+): void {
+  const key = uploadClaimKeys.get(itemId);
+  if (!key) return;
+  uploadClaimKeys.delete(itemId);
+  getTabSync().release(key, reason);
+}
+
+function releaseDownloadClaim(
+  itemId: string,
+  reason: TransferReleaseReason,
+): void {
+  const key = downloadClaimKeys.get(itemId);
+  if (!key) return;
+  downloadClaimKeys.delete(itemId);
+  getTabSync().release(key, reason);
+}
+
+function releaseAllLocalClaims(reason: TransferReleaseReason): void {
+  uploadClaimKeys.clear();
+  downloadClaimKeys.clear();
+  getTabSync().releaseAll(reason);
+}
+
+function broadcastCancelForItem(item: {
+  id: string;
+  sessionId?: string;
+}): void {
+  const sessionKey = transferClaimKey(props.agent_id, {
+    sessionId: item.sessionId,
+    queueId: item.id,
+  });
+  const localKey = transferClaimKey(props.agent_id, { queueId: item.id });
+  getTabSync().release(sessionKey, "cancel");
+  if (localKey !== sessionKey) {
+    getTabSync().release(localKey, "cancel");
+  }
+}
+
+function abortLocalTransferForClaimKey(key: string): void {
+  for (const item of uploadQueue.value) {
+    if (!itemMatchesClaimKey(item, key)) continue;
+    if (
+      item.status === "uploading" ||
+      item.status === "queued" ||
+      isUploadQueueItemActive(item.status)
+    ) {
+      const intent = uploadAbortIntents.get(item.id);
+      if (intent) intent.mode = "cancel";
+      uploadAbortControllers.get(item.id)?.abort();
+      if (item.status === "queued") {
+        item.status = "cancelled";
+        item.ownedByOtherTab = false;
+        releaseUploadClaim(item.id, "cancel");
+        deleteLocalPausedEntry(props.agent_id, item.id);
+      }
+    }
+  }
+  for (const item of downloadQueue.value) {
+    if (!itemMatchesClaimKey(item, key)) continue;
+    if (item.status === "queued" || isDownloadQueueItemActive(item.status)) {
+      const intent = downloadAbortIntents.get(item.id);
+      if (intent) intent.mode = "cancel";
+      downloadAbortControllers.get(item.id)?.abort();
+      if (item.status === "queued") {
+        item.status = "cancelled";
+        item.ownedByOtherTab = false;
+        releaseDownloadClaim(item.id, "cancel");
+        deleteLocalPausedEntry(props.agent_id, item.id);
+      }
+    }
+  }
+}
+
+function onTransferTabSyncEvent(event: TransferTabSyncEvent): void {
+  if (event.type === "remote_release" && event.reason === "cancel") {
+    abortLocalTransferForClaimKey(event.key);
+  }
+  if (
+    event.type === "remote_change" ||
+    event.type === "remote_claim" ||
+    event.type === "remote_release"
+  ) {
+    applyRemoteOwnershipFlags();
+  }
+}
+
+async function restoreResumableTransfers(seq: number): Promise<void> {
   try {
     const data = await listAgentFileTransfers(props.agent_id);
+    if (seq !== restoreSeq) return;
+
     const { uploads, downloads } = await reconcileResumableTransfers(
       props.agent_id,
       data.transfers ?? [],
     );
+    if (seq !== restoreSeq) return;
 
     const liveUploadIds = new Set(
       uploadQueue.value
@@ -1040,10 +1225,14 @@ async function restoreResumableTransfers(): Promise<void> {
         .filter((id): id is string => !!id),
     );
     for (const restored of uploads) {
+      if (seq !== restoreSeq) return;
       if (liveUploadIds.has(restored.id)) continue;
       if (restored.sessionId && liveUploadSessions.has(restored.sessionId)) {
         continue;
       }
+      restored.ownedByOtherTab = getTabSync().isRemotelyOwned(
+        claimKeyForUpload(restored),
+      );
       const existingIdx = uploadQueue.value.findIndex(
         (i) =>
           i.id === restored.id ||
@@ -1078,10 +1267,14 @@ async function restoreResumableTransfers(): Promise<void> {
         .filter((id): id is string => !!id),
     );
     for (const restored of downloads) {
+      if (seq !== restoreSeq) return;
       if (liveDownloadIds.has(restored.id)) continue;
       if (restored.sessionId && liveDownloadSessions.has(restored.sessionId)) {
         continue;
       }
+      restored.ownedByOtherTab = getTabSync().isRemotelyOwned(
+        claimKeyForDownload(restored),
+      );
       const existingIdx = downloadQueue.value.findIndex(
         (i) =>
           i.id === restored.id ||
@@ -1099,6 +1292,7 @@ async function restoreResumableTransfers(): Promise<void> {
       downloadQueue.value.push(restored);
     }
   } catch (err: unknown) {
+    if (seq !== restoreSeq) return;
     console.warn("Failed to restore resumable transfers", err);
   }
 }
@@ -1378,6 +1572,16 @@ async function runSingleDownload(itemId: string): Promise<void> {
   const item = findDownloadItem(itemId);
   if (!item || item.status !== "queued") return;
 
+  const claimKey = claimKeyForDownload(item);
+  if (!getTabSync().tryClaim(claimKey)) {
+    item.status = "paused";
+    item.ownedByOtherTab = true;
+    item.errorMessage = undefined;
+    return;
+  }
+  downloadClaimKeys.set(itemId, claimKey);
+  item.ownedByOtherTab = false;
+
   item.status = "initializing";
   item.errorMessage = undefined;
   item.progress = 0;
@@ -1396,6 +1600,20 @@ async function runSingleDownload(itemId: string): Promise<void> {
       onSession: (sessionId: string) => {
         const current = findDownloadItem(itemId);
         if (current) current.sessionId = sessionId;
+        const prevKey = downloadClaimKeys.get(itemId);
+        const nextKey = transferClaimKey(props.agent_id, {
+          sessionId,
+          queueId: itemId,
+        });
+        if (prevKey && prevKey !== nextKey) {
+          if (getTabSync().rekeyClaim(prevKey, nextKey)) {
+            downloadClaimKeys.set(itemId, nextKey);
+          }
+        } else if (!prevKey) {
+          if (getTabSync().tryClaim(nextKey)) {
+            downloadClaimKeys.set(itemId, nextKey);
+          }
+        }
       },
       onProgress: ({
         committedOffset,
@@ -1446,6 +1664,7 @@ async function runSingleDownload(itemId: string): Promise<void> {
     current.hidden = false;
     const doneSession = current.sessionId;
     current.sessionId = undefined;
+    releaseDownloadClaim(itemId, "complete");
     if (doneSession) {
       const handleKey =
         current.kind === "archive" && current.archivePaths?.length
@@ -1481,6 +1700,8 @@ async function runSingleDownload(itemId: string): Promise<void> {
       const mode = downloadAbortIntents.get(itemId)?.mode ?? "pause";
       current.status = mode === "cancel" ? "cancelled" : "paused";
       current.errorMessage = undefined;
+      current.ownedByOtherTab = false;
+      releaseDownloadClaim(itemId, mode === "cancel" ? "cancel" : "pause");
       if (mode === "cancel") {
         const sid = current.sessionId;
         current.sessionId = undefined;
@@ -1512,6 +1733,8 @@ async function runSingleDownload(itemId: string): Promise<void> {
 
     current.status = "failed";
     current.hidden = false;
+    current.ownedByOtherTab = false;
+    releaseDownloadClaim(itemId, "fail");
     const integrityFailed =
       err instanceof Error &&
       /integrity check failed|sha-256 mismatch/i.test(err.message);
@@ -1609,10 +1832,13 @@ function abortDownloadItem(
   const item = findDownloadItem(id);
   if (item && item.status === "queued") {
     item.status = mode === "cancel" ? "cancelled" : "paused";
+    item.ownedByOtherTab = false;
+    releaseDownloadClaim(id, mode === "cancel" ? "cancel" : "pause");
     if (mode === "pause") {
       void persistDownloadQueueMeta(props.agent_id, item);
     } else {
       deleteLocalPausedEntry(props.agent_id, item.id);
+      broadcastCancelForItem(item);
     }
   }
 }
@@ -1634,6 +1860,7 @@ async function discardPausedDownload(item: DownloadQueueItem): Promise<void> {
   item.status = "cancelled";
   item.hidden = false;
   item.errorMessage = undefined;
+  item.ownedByOtherTab = false;
 
   const resumeScopeKey =
     item.kind === "archive" && item.archivePaths?.length
@@ -1646,6 +1873,8 @@ async function discardPausedDownload(item: DownloadQueueItem): Promise<void> {
 
   const saved = loadDownloadResume(props.agent_id, resumeScopeKey);
   const sessionId = item.sessionId || saved?.sessionId;
+  broadcastCancelForItem({ id: item.id, sessionId });
+  releaseDownloadClaim(item.id, "cancel");
   if (sessionId) {
     try {
       await cancelAgentFileDownload(props.agent_id, sessionId, "user");
@@ -1664,6 +1893,14 @@ async function discardPausedDownload(item: DownloadQueueItem): Promise<void> {
 function resumeDownloadItem(id: string) {
   const item = findDownloadItem(id);
   if (!item || item.status !== "paused") return;
+  if (
+    item.ownedByOtherTab ||
+    getTabSync().isRemotelyOwned(claimKeyForDownload(item))
+  ) {
+    item.ownedByOtherTab = true;
+    notifyWarning("This download is open in another tab.");
+    return;
+  }
   if (item.recoveryHint === "non_resumable") {
     notifyWarning(
       "This download cannot be resumed here. Cancel it to free the server session.",
@@ -1673,6 +1910,7 @@ function resumeDownloadItem(id: string) {
   item.hidden = false;
   item.status = "queued";
   item.errorMessage = undefined;
+  item.ownedByOtherTab = false;
   void processDownloadQueue();
 }
 
@@ -2077,6 +2315,16 @@ async function runSingleUpload(itemId: string): Promise<void> {
     return;
   }
 
+  const claimKey = claimKeyForUpload(item);
+  if (!getTabSync().tryClaim(claimKey)) {
+    item.status = "paused";
+    item.ownedByOtherTab = true;
+    item.errorMessage = undefined;
+    return;
+  }
+  uploadClaimKeys.set(itemId, claimKey);
+  item.ownedByOtherTab = false;
+
   item.status = "uploading";
   item.errorMessage = undefined;
   item.progress = 0;
@@ -2102,6 +2350,20 @@ async function runSingleUpload(itemId: string): Promise<void> {
         onSession: (sessionId: string) => {
           const current = findUploadItem(itemId);
           if (current) current.sessionId = sessionId;
+          const prevKey = uploadClaimKeys.get(itemId);
+          const nextKey = transferClaimKey(props.agent_id, {
+            sessionId,
+            queueId: itemId,
+          });
+          if (prevKey && prevKey !== nextKey) {
+            if (getTabSync().rekeyClaim(prevKey, nextKey)) {
+              uploadClaimKeys.set(itemId, nextKey);
+            }
+          } else if (!prevKey) {
+            if (getTabSync().tryClaim(nextKey)) {
+              uploadClaimKeys.set(itemId, nextKey);
+            }
+          }
         },
         onProgress: (p) => updateUploadProgress(itemId, p),
       },
@@ -2114,6 +2376,8 @@ async function runSingleUpload(itemId: string): Promise<void> {
       current.status = "failed";
       current.hidden = false;
       current.sessionId = undefined;
+      current.ownedByOtherTab = false;
+      releaseUploadClaim(itemId, "fail");
       current.errorMessage =
         "Upload failed: file integrity check did not match.";
       if (!multiBatch) {
@@ -2127,6 +2391,7 @@ async function runSingleUpload(itemId: string): Promise<void> {
     current.hidden = false;
     const doneSession = current.sessionId;
     current.sessionId = undefined;
+    releaseUploadClaim(itemId, "complete");
     if (doneSession) {
       void clearTransferPersistence(props.agent_id, doneSession, {
         localQueueId: current.id,
@@ -2145,6 +2410,8 @@ async function runSingleUpload(itemId: string): Promise<void> {
       const mode = uploadAbortIntents.get(itemId)?.mode ?? "pause";
       current.status = mode === "cancel" ? "cancelled" : "paused";
       current.errorMessage = undefined;
+      current.ownedByOtherTab = false;
+      releaseUploadClaim(itemId, mode === "cancel" ? "cancel" : "pause");
       if (mode === "cancel") {
         const sid = current.sessionId;
         current.sessionId = undefined;
@@ -2166,6 +2433,8 @@ async function runSingleUpload(itemId: string): Promise<void> {
 
     current.status = "failed";
     current.hidden = false;
+    current.ownedByOtherTab = false;
+    releaseUploadClaim(itemId, "fail");
     const integrityFailed =
       err instanceof Error &&
       /integrity check failed|sha-256 mismatch/i.test(err.message);
@@ -2238,10 +2507,13 @@ function abortUploadItem(id: string, mode: TransferAbortIntent["mode"]): void {
   const item = findUploadItem(id);
   if (item && item.status === "queued") {
     item.status = mode === "cancel" ? "cancelled" : "paused";
+    item.ownedByOtherTab = false;
+    releaseUploadClaim(id, mode === "cancel" ? "cancel" : "pause");
     if (mode === "pause") {
       void persistUploadQueueMeta(props.agent_id, item);
     } else {
       deleteLocalPausedEntry(props.agent_id, item.id);
+      broadcastCancelForItem(item);
     }
   }
 }
@@ -2263,6 +2535,7 @@ async function discardPausedUpload(item: UploadQueueItem): Promise<void> {
   item.status = "cancelled";
   item.hidden = false;
   item.errorMessage = undefined;
+  item.ownedByOtherTab = false;
 
   let sessionId = item.sessionId;
   if (!sessionId && item.file) {
@@ -2273,6 +2546,8 @@ async function discardPausedUpload(item: UploadQueueItem): Promise<void> {
     );
     sessionId = saved?.sessionId;
   }
+  broadcastCancelForItem({ id: item.id, sessionId });
+  releaseUploadClaim(item.id, "cancel");
   if (sessionId) {
     try {
       await cancelAgentFileUpload(props.agent_id, sessionId, "user");
@@ -2292,6 +2567,14 @@ async function discardPausedUpload(item: UploadQueueItem): Promise<void> {
 function selectFileToResumeUpload(id: string) {
   const item = findUploadItem(id);
   if (!item || item.status !== "paused") return;
+  if (
+    item.ownedByOtherTab ||
+    getTabSync().isRemotelyOwned(claimKeyForUpload(item))
+  ) {
+    item.ownedByOtherTab = true;
+    notifyWarning("This upload is open in another tab.");
+    return;
+  }
   resumeUploadTargetId = id;
   resumeUploadFileInputRef.value?.click();
 }
@@ -2306,6 +2589,14 @@ function onResumeUploadFileSelected(event: Event) {
 
   const item = findUploadItem(targetId);
   if (!item || item.status !== "paused") return;
+  if (
+    item.ownedByOtherTab ||
+    getTabSync().isRemotelyOwned(claimKeyForUpload(item))
+  ) {
+    item.ownedByOtherTab = true;
+    notifyWarning("This upload is open in another tab.");
+    return;
+  }
 
   if (item.uploadFileIdentity) {
     if (!matchesUploadFileIdentity(file, item.uploadFileIdentity)) {
@@ -2343,6 +2634,14 @@ function onResumeUploadFileSelected(event: Event) {
 function resumeUploadItem(id: string) {
   const item = findUploadItem(id);
   if (!item || item.status !== "paused") return;
+  if (
+    item.ownedByOtherTab ||
+    getTabSync().isRemotelyOwned(claimKeyForUpload(item))
+  ) {
+    item.ownedByOtherTab = true;
+    notifyWarning("This upload is open in another tab.");
+    return;
+  }
   if (!item.file) {
     selectFileToResumeUpload(id);
     return;
@@ -2351,6 +2650,7 @@ function resumeUploadItem(id: string) {
   item.status = "queued";
   item.errorMessage = undefined;
   item.recoveryHint = undefined;
+  item.ownedByOtherTab = false;
   void processUploadQueue();
 }
 
@@ -2414,7 +2714,6 @@ function onGlobalFindShortcut(e: KeyboardEvent) {
   if (e.altKey || e.shiftKey) return;
 
   const root = rootRef.value;
-  // Hidden tab panels (display:none / zero boxes) must not steal browser find.
   if (!root || root.getClientRects().length === 0) return;
 
   const active = document.activeElement as HTMLElement | null;
@@ -2423,7 +2722,6 @@ function onGlobalFindShortcut(e: KeyboardEvent) {
     !active || active === document.body || active === document.documentElement;
   if (!focusInside && !focusIsBody) return;
 
-  // Teleported dialogs / terminal / menus sit outside our root.
   if (
     active?.closest?.(
       ".q-dialog, .q-menu, .xterm, [role='dialog'], [contenteditable='true']",
