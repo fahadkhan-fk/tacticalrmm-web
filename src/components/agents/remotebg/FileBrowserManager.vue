@@ -250,6 +250,7 @@ import {
   type TransferTabSync,
   type TransferTabSyncEvent,
 } from "@/services/fileTransfer/transferTabSync";
+import { TRANSFER_SLOT_WAIT_MESSAGE } from "@/services/fileTransfer/sessionLimit";
 import type {
   DownloadTransferStatus,
   TransferAbortIntent,
@@ -1597,9 +1598,21 @@ async function runSingleDownload(itemId: string): Promise<void> {
       abortIntent,
       chunkSize: FILE_TRANSFER_DEFAULT_CHUNK_SIZE,
       knownSessionId: item.sessionId,
+      onWaitingForSlot: () => {
+        const current = findDownloadItem(itemId);
+        if (!current) return;
+        if (current.status === "queued") {
+          current.status = "initializing";
+        }
+        current.errorMessage = TRANSFER_SLOT_WAIT_MESSAGE;
+      },
       onSession: (sessionId: string) => {
         const current = findDownloadItem(itemId);
-        if (current) current.sessionId = sessionId;
+        if (!current) return;
+        current.sessionId = sessionId;
+        if (current.errorMessage === TRANSFER_SLOT_WAIT_MESSAGE) {
+          current.errorMessage = undefined;
+        }
         const prevKey = downloadClaimKeys.get(itemId);
         const nextKey = transferClaimKey(props.agent_id, {
           sessionId,
@@ -1628,11 +1641,20 @@ async function runSingleDownload(itemId: string): Promise<void> {
         if (current.status === "initializing") {
           current.status = "downloading";
         }
+        if (current.errorMessage === TRANSFER_SLOT_WAIT_MESSAGE) {
+          current.errorMessage = undefined;
+        }
       },
       onStatus: (status: "initializing" | "downloading" | "completing") => {
         const current = findDownloadItem(itemId);
         if (!current) return;
         current.status = status;
+        if (
+          (status === "downloading" || status === "completing") &&
+          current.errorMessage === TRANSFER_SLOT_WAIT_MESSAGE
+        ) {
+          current.errorMessage = undefined;
+        }
       },
     };
 
@@ -2347,9 +2369,18 @@ async function runSingleUpload(itemId: string): Promise<void> {
         chunkSize: FILE_TRANSFER_DEFAULT_CHUNK_SIZE,
         conflictPolicy: item.conflictPolicy ?? "replace",
         knownSessionId: item.sessionId,
+        onWaitingForSlot: () => {
+          const current = findUploadItem(itemId);
+          if (!current) return;
+          current.errorMessage = TRANSFER_SLOT_WAIT_MESSAGE;
+        },
         onSession: (sessionId: string) => {
           const current = findUploadItem(itemId);
-          if (current) current.sessionId = sessionId;
+          if (!current) return;
+          current.sessionId = sessionId;
+          if (current.errorMessage === TRANSFER_SLOT_WAIT_MESSAGE) {
+            current.errorMessage = undefined;
+          }
           const prevKey = uploadClaimKeys.get(itemId);
           const nextKey = transferClaimKey(props.agent_id, {
             sessionId,
@@ -2365,7 +2396,13 @@ async function runSingleUpload(itemId: string): Promise<void> {
             }
           }
         },
-        onProgress: (p) => updateUploadProgress(itemId, p),
+        onProgress: (p) => {
+          updateUploadProgress(itemId, p);
+          const current = findUploadItem(itemId);
+          if (current && current.errorMessage === TRANSFER_SLOT_WAIT_MESSAGE) {
+            current.errorMessage = undefined;
+          }
+        },
       },
     );
 

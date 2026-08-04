@@ -59,7 +59,18 @@
             item.sizeLabel
           }}</q-item-label>
           <q-item-label
-            v-if="item.status === 'paused' && resumeCaption(item)"
+            v-if="
+              item.errorMessage &&
+              item.status === 'uploading' &&
+              /waiting for a free transfer slot/i.test(item.errorMessage)
+            "
+            caption
+            class="upload-queue-item-meta"
+          >
+            {{ item.errorMessage }}
+          </q-item-label>
+          <q-item-label
+            v-else-if="item.status === 'paused' && resumeCaption(item)"
             caption
             class="upload-queue-item-meta"
           >
@@ -82,7 +93,7 @@
             :text-color="item.status === 'queued' ? 'dark' : undefined"
             align="middle"
           >
-            {{ uploadStatusLabel(item.status) }}
+            {{ uploadStatusLabelForItem(item) }}
           </q-badge>
           <div
             v-if="item.status === 'uploading'"
@@ -231,6 +242,18 @@ function resumeCaption(item: UploadQueueItem): string | null {
   }
   return formatResumeWindowCaption(item.expiresAt);
 }
+
+function uploadStatusLabelForItem(item: UploadQueueItem): string {
+  if (
+    item.status === "uploading" &&
+    item.errorMessage &&
+    /waiting for a free transfer slot/i.test(item.errorMessage)
+  ) {
+    return "Waiting for slot…";
+  }
+  return uploadStatusLabel(item.status);
+}
+
 const canClearFinished = computed(() =>
   props.items.some((item) => isUploadQueueItemTerminal(item.status)),
 );

@@ -271,7 +271,7 @@ export function isAbortError(err: unknown): boolean {
   if (e.name === "CanceledError" || e.name === "AbortError") return true;
   if (typeof axios.isCancel === "function" && axios.isCancel(err)) return true;
   if (
-    /^(canceled|cancelled|download aborted|upload aborted)$/i.test(
+    /^(canceled|cancelled|download aborted|upload aborted|transfer aborted)$/i.test(
       (e.message ?? "").trim(),
     )
   ) {

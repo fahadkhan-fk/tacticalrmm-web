@@ -72,6 +72,15 @@
             {{ item.errorMessage }}
           </q-item-label>
           <q-item-label
+            v-else-if="
+              item.errorMessage && isDownloadQueueItemActive(item.status)
+            "
+            caption
+            class="download-queue-item-meta"
+          >
+            {{ item.errorMessage }}
+          </q-item-label>
+          <q-item-label
             v-else-if="item.status === 'paused' && pausedCaption(item)"
             caption
             class="download-queue-item-meta"
@@ -98,7 +107,7 @@
             :text-color="item.status === 'queued' ? 'dark' : undefined"
             align="middle"
           >
-            {{ downloadStatusLabel(item.status) }}
+            {{ downloadStatusLabelForItem(item) }}
           </q-badge>
           <div
             v-if="isDownloadQueueItemActive(item.status)"
@@ -234,6 +243,18 @@ function pausedCaption(item: DownloadQueueItem): string | null {
   if (window) parts.push(window);
   return parts.length ? parts.join(" · ") : null;
 }
+
+function downloadStatusLabelForItem(item: DownloadQueueItem): string {
+  if (
+    item.errorMessage &&
+    isDownloadQueueItemActive(item.status) &&
+    /waiting for a free transfer slot/i.test(item.errorMessage)
+  ) {
+    return "Waiting for slot…";
+  }
+  return downloadStatusLabel(item.status);
+}
+
 const canClearFinished = computed(() =>
   props.items.some((item) => canDismissDownloadQueueItem(item.status)),
 );

@@ -37,6 +37,11 @@ import {
   loadDownloadResume,
   saveDownloadResume,
 } from "./resume";
+import {
+  type TransferSlotWaitInfo,
+  sleepAbortable,
+  withTransferSessionRetry,
+} from "./sessionLimit";
 
 export interface RunFileDownloadOptions {
   signal?: AbortSignal;
@@ -47,6 +52,7 @@ export interface RunFileDownloadOptions {
   onSession?: (sessionId: string) => void;
   knownSessionId?: string;
   onArchiveBuilding?: () => void;
+  onWaitingForSlot?: (info: TransferSlotWaitInfo) => void;
 }
 
 interface DownloadSink {
@@ -86,24 +92,6 @@ async function discardDownloadResumeState(
   await idbDeleteFileHandle(handleKey).catch(() => {});
 }
 
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(new DOMException("Download aborted", "AbortError"));
-      return;
-    }
-    const timer = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(new DOMException("Download aborted", "AbortError"));
-    };
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
 async function waitForArchiveReady(
   agentId: string,
   sessionId: string,
@@ -130,7 +118,7 @@ async function waitForArchiveReady(
         "Timed out waiting for the archive to build on the agent.",
       );
     }
-    await sleep(ARCHIVE_STATUS_POLL_INTERVAL_MS, signal);
+    await sleepAbortable(ARCHIVE_STATUS_POLL_INTERVAL_MS, signal);
   }
 }
 
@@ -291,6 +279,7 @@ export async function runFileDownloadTransfer(
     onStatus,
     onSession,
     knownSessionId,
+    onWaitingForSlot,
   } = options;
   const fileName = fileNameFromPath(sourcePath);
 
@@ -332,10 +321,18 @@ export async function runFileDownloadTransfer(
         await releaseDownloadSession(agentId, staleSessionId, "user");
         staleSessionId = null;
       }
-      initData = await initAgentFileDownload(agentId, {
-        source_path: sourcePath,
-        chunk_size: options.chunkSize ?? FILE_TRANSFER_DEFAULT_CHUNK_SIZE,
-      });
+      initData = await withTransferSessionRetry(
+        () =>
+          initAgentFileDownload(
+            agentId,
+            {
+              source_path: sourcePath,
+              chunk_size: options.chunkSize ?? FILE_TRANSFER_DEFAULT_CHUNK_SIZE,
+            },
+            signal,
+          ),
+        { signal, onWaitingForSlot },
+      );
       effectiveResumeOffset = 0;
     }
 
@@ -455,6 +452,7 @@ export async function runArchiveDownloadTransfer(
     onSession,
     knownSessionId,
     onArchiveBuilding,
+    onWaitingForSlot,
   } = options;
   const resumeScopeKey = archiveDownloadResumeKey(agentId, paths);
   const fileName = suggestedFileName.trim() || "download.zip";
@@ -487,11 +485,20 @@ export async function runArchiveDownloadTransfer(
       handleKey,
       async () => {
         onArchiveBuilding?.();
-        initData = await initAgentArchiveDownload(agentId, {
-          paths,
-          filename: fileName,
-          chunk_size: options.chunkSize ?? FILE_TRANSFER_DEFAULT_CHUNK_SIZE,
-        });
+        initData = await withTransferSessionRetry(
+          () =>
+            initAgentArchiveDownload(
+              agentId,
+              {
+                paths,
+                filename: fileName,
+                chunk_size:
+                  options.chunkSize ?? FILE_TRANSFER_DEFAULT_CHUNK_SIZE,
+              },
+              signal,
+            ),
+          { signal, onWaitingForSlot },
+        );
         sessionId = initData.session_id;
       },
     ));
@@ -530,11 +537,20 @@ export async function runArchiveDownloadTransfer(
       }
       if (!sessionId) {
         onArchiveBuilding?.();
-        initData = await initAgentArchiveDownload(agentId, {
-          paths,
-          filename: fileName,
-          chunk_size: options.chunkSize ?? FILE_TRANSFER_DEFAULT_CHUNK_SIZE,
-        });
+        initData = await withTransferSessionRetry(
+          () =>
+            initAgentArchiveDownload(
+              agentId,
+              {
+                paths,
+                filename: fileName,
+                chunk_size:
+                  options.chunkSize ?? FILE_TRANSFER_DEFAULT_CHUNK_SIZE,
+              },
+              signal,
+            ),
+          { signal, onWaitingForSlot },
+        );
         sessionId = initData.session_id;
       }
       effectiveResumeOffset = 0;

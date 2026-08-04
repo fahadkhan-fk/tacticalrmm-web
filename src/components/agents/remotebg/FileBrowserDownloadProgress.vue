@@ -142,6 +142,15 @@ const progressColor = computed(() => {
 });
 
 const statusLabel = computed(() => {
+  if (
+    props.errorMessage &&
+    (props.status === "initializing" ||
+      props.status === "downloading" ||
+      props.status === "completing") &&
+    /waiting for a free transfer slot/i.test(props.errorMessage)
+  ) {
+    return props.errorMessage;
+  }
   switch (props.status) {
     case "initializing":
       return props.buildingArchive ? "Building archive…" : "Initializing…";

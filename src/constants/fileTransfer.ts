@@ -13,3 +13,7 @@ export const FILE_TRANSFER_LOCAL_PAUSED_LS_KEY = "trmm-transfer-local-paused";
 export const FILE_TRANSFER_TAB_SYNC_CHANNEL = "trmm-file-transfer-tab-sync";
 export const FILE_TRANSFER_TAB_SYNC_HEARTBEAT_MS = 5_000;
 export const FILE_TRANSFER_TAB_SYNC_STALE_MS = 15_000;
+export const FILE_TRANSFER_SLOT_RETRY_BASE_MS = 2_000;
+export const FILE_TRANSFER_SLOT_RETRY_MAX_MS = 30_000;
+export const TRANSFER_SLOT_WAIT_MESSAGE =
+  "Waiting for a free transfer slot. Cancel or finish a paused transfer to continue.";

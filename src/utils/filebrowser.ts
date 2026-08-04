@@ -307,6 +307,9 @@ export function getFileBrowserErrorMessage(
   err: unknown,
   fallback = "Unable to complete the operation.",
 ): string {
+  if (err instanceof AxiosError && err.response?.status === 429) {
+    return "Too many concurrent file transfers. Cancel or finish a paused transfer, then try again.";
+  }
   const message = getListFilesErrorMessage(err);
   if (message === "Unable to load directory contents.") {
     return fallback;

@@ -37,11 +37,12 @@ export interface ResumeFileUploadPayload {
 export async function initAgentFileUpload(
   agentId: string,
   payload: InitFileUploadPayload,
+  signal?: AbortSignal,
 ): Promise<FileTransferInitUploadResponse> {
   const { data } = await axios.post<FileTransferInitUploadResponse>(
     `${baseUrl}/${agentId}/files/upload/init/`,
     payload,
-    { timeout: 60_000, ...transferRequestConfig },
+    { timeout: 60_000, signal, ...transferRequestConfig },
   );
   return data;
 }
@@ -114,11 +115,12 @@ export interface ResumeFileDownloadPayload {
 export async function initAgentArchiveDownload(
   agentId: string,
   payload: InitArchiveDownloadPayload,
+  signal?: AbortSignal,
 ): Promise<FileTransferInitDownloadResponse> {
   const { data } = await axios.post<FileTransferInitDownloadResponse>(
     `${baseUrl}/${agentId}/files/download/archive/init/`,
     payload,
-    { timeout: 60_000, ...transferRequestConfig },
+    { timeout: 60_000, signal, ...transferRequestConfig },
   );
   return data;
 }
@@ -138,11 +140,12 @@ export async function getAgentDownloadStatus(
 export async function initAgentFileDownload(
   agentId: string,
   payload: InitFileDownloadPayload,
+  signal?: AbortSignal,
 ): Promise<FileTransferInitDownloadResponse> {
   const { data } = await axios.post<FileTransferInitDownloadResponse>(
     `${baseUrl}/${agentId}/files/download/init/`,
     payload,
-    { timeout: 60_000, ...transferRequestConfig },
+    { timeout: 60_000, signal, ...transferRequestConfig },
   );
   return data;
 }

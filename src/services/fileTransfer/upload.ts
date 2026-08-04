@@ -19,6 +19,10 @@ import {
   loadUploadResume,
   saveUploadResume,
 } from "./resume";
+import {
+  type TransferSlotWaitInfo,
+  withTransferSessionRetry,
+} from "./sessionLimit";
 
 export interface RunFileUploadOptions {
   signal?: AbortSignal;
@@ -28,6 +32,7 @@ export interface RunFileUploadOptions {
   onProgress?: (progress: FileTransferProgress) => void;
   onSession?: (sessionId: string) => void;
   knownSessionId?: string;
+  onWaitingForSlot?: (info: TransferSlotWaitInfo) => void;
 }
 
 async function releaseUploadSession(
@@ -49,8 +54,14 @@ export async function runFileUploadTransfer(
   destinationPath: string,
   options: RunFileUploadOptions = {},
 ): Promise<FileTransferUploadResult> {
-  const { signal, abortIntent, onProgress, onSession, knownSessionId } =
-    options;
+  const {
+    signal,
+    abortIntent,
+    onProgress,
+    onSession,
+    knownSessionId,
+    onWaitingForSlot,
+  } = options;
   const totalSize = file.size;
   const saved = loadUploadResume(agentId, file, destinationPath);
 
@@ -78,13 +89,21 @@ export async function runFileUploadTransfer(
       await releaseUploadSession(agentId, staleSessionId, "user");
       staleSessionId = null;
     }
-    initData = await initAgentFileUpload(agentId, {
-      filename: file.name,
-      destination_path: destinationPath,
-      total_size: totalSize,
-      chunk_size: options.chunkSize ?? FILE_TRANSFER_DEFAULT_CHUNK_SIZE,
-      conflict_policy: options.conflictPolicy ?? "replace",
-    });
+    initData = await withTransferSessionRetry(
+      () =>
+        initAgentFileUpload(
+          agentId,
+          {
+            filename: file.name,
+            destination_path: destinationPath,
+            total_size: totalSize,
+            chunk_size: options.chunkSize ?? FILE_TRANSFER_DEFAULT_CHUNK_SIZE,
+            conflict_policy: options.conflictPolicy ?? "replace",
+          },
+          signal,
+        ),
+      { signal, onWaitingForSlot },
+    );
     saveUploadResume(agentId, file, destinationPath, initData.session_id);
   }
 
