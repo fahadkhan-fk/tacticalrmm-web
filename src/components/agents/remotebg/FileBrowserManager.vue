@@ -1583,9 +1583,14 @@ async function runSingleDownload(itemId: string): Promise<void> {
   downloadClaimKeys.set(itemId, claimKey);
   item.ownedByOtherTab = false;
 
-  item.status = "initializing";
+  const priorProgress =
+    typeof item.progress === "number" && item.progress > 0 ? item.progress : 0;
+  const isResume = Boolean(item.sessionId) || priorProgress > 0;
+  item.status = isResume ? "downloading" : "initializing";
   item.errorMessage = undefined;
-  item.progress = 0;
+  if (!isResume) {
+    item.progress = 0;
+  }
 
   const controller = new AbortController();
   const abortIntent: TransferAbortIntent = { mode: "pause" };
@@ -1637,6 +1642,8 @@ async function runSingleDownload(itemId: string): Promise<void> {
       }) => {
         const current = findDownloadItem(itemId);
         if (!current) return;
+        current.committedOffset = committedOffset;
+        current.totalSize = totalSize;
         current.progress = totalSize > 0 ? committedOffset / totalSize : 0;
         if (current.status === "initializing") {
           current.status = "downloading";
@@ -1648,6 +1655,12 @@ async function runSingleDownload(itemId: string): Promise<void> {
       onStatus: (status: "initializing" | "downloading" | "completing") => {
         const current = findDownloadItem(itemId);
         if (!current) return;
+        if (
+          status === "initializing" &&
+          (current.progress > 0 || current.sessionId)
+        ) {
+          return;
+        }
         current.status = status;
         if (
           (status === "downloading" || status === "completing") &&
@@ -1668,7 +1681,10 @@ async function runSingleDownload(itemId: string): Promise<void> {
               ...transferOptions,
               onArchiveBuilding: () => {
                 const current = findDownloadItem(itemId);
-                if (current) current.status = "initializing";
+                if (!current) return;
+                if (!(current.progress > 0 || current.sessionId)) {
+                  current.status = "initializing";
+                }
               },
             },
           )
@@ -2347,9 +2363,14 @@ async function runSingleUpload(itemId: string): Promise<void> {
   uploadClaimKeys.set(itemId, claimKey);
   item.ownedByOtherTab = false;
 
+  const priorProgress =
+    typeof item.progress === "number" && item.progress > 0 ? item.progress : 0;
+  const isResume = Boolean(item.sessionId) || priorProgress > 0;
   item.status = "uploading";
   item.errorMessage = undefined;
-  item.progress = 0;
+  if (!isResume) {
+    item.progress = 0;
+  }
   item.recoveryHint = undefined;
 
   const controller = new AbortController();
