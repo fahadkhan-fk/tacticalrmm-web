@@ -16,7 +16,12 @@
           label="Clear finished"
           :disable="!canClearFinished"
           @click="emit('clear-finished')"
-        />
+        >
+          <q-tooltip
+            >Remove completed, failed, and cancelled items from this
+            list.</q-tooltip
+          >
+        </q-btn>
         <q-btn
           dense
           flat

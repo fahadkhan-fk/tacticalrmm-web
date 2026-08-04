@@ -16,7 +16,12 @@
           label="Clear finished"
           :disable="!canClearFinished"
           @click="emit('clear-finished')"
-        />
+        >
+          <q-tooltip
+            >Remove completed, failed, and cancelled items from this
+            list.</q-tooltip
+          >
+        </q-btn>
         <q-btn
           dense
           flat
@@ -39,7 +44,9 @@
           label="Pause all"
           :disable="!canPauseAll"
           @click="emit('pause-all')"
-        />
+        >
+          <q-tooltip>Pause all active and queued downloads.</q-tooltip>
+        </q-btn>
       </div>
     </div>
     <div
