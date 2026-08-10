@@ -17,3 +17,15 @@ export const FILE_TRANSFER_SLOT_RETRY_BASE_MS = 2_000;
 export const FILE_TRANSFER_SLOT_RETRY_MAX_MS = 30_000;
 export const TRANSFER_SLOT_WAIT_MESSAGE =
   "Waiting for a free transfer slot. Cancel or finish a paused transfer to continue.";
+export const TRANSFER_TOOLTIP_CLEAR_FINISHED =
+  "Remove completed, failed, and cancelled items from this list.";
+export const TRANSFER_TOOLTIP_HIDE_PAUSED =
+  "Hide paused items. Open Transfers to show them again.";
+export const TRANSFER_TOOLTIP_PAUSE_ALL =
+  "Pause all active and queued downloads.";
+export const TRANSFER_TOOLTIP_PAUSE = "Pause this download.";
+export const TRANSFER_TOOLTIP_CANCEL =
+  "Cancel download and release the transfer slot.";
+export const TRANSFER_TOOLTIP_OPEN_IN_OTHER_TAB = "Open in another tab";
+export const TRANSFER_TOOLTIP_DISMISS = "Dismiss";
+export const TRANSFER_TOOLTIP_REMOVE_FROM_QUEUE = "Remove from queue";

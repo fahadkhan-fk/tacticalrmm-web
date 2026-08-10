@@ -16,7 +16,9 @@
             size="sm"
             label="Pause"
             @click="emit('pause')"
-          />
+          >
+            <q-tooltip>{{ TRANSFER_TOOLTIP_PAUSE }}</q-tooltip>
+          </q-btn>
           <q-btn
             dense
             flat
@@ -25,7 +27,9 @@
             color="negative"
             label="Cancel"
             @click="emit('cancel')"
-          />
+          >
+            <q-tooltip>{{ TRANSFER_TOOLTIP_CANCEL }}</q-tooltip>
+          </q-btn>
         </template>
         <template v-else-if="isPaused">
           <q-btn
@@ -38,7 +42,9 @@
             :disable="ownedByOtherTab"
             @click="emit('resume')"
           >
-            <q-tooltip v-if="ownedByOtherTab">Open in another tab</q-tooltip>
+            <q-tooltip v-if="ownedByOtherTab">{{
+              TRANSFER_TOOLTIP_OPEN_IN_OTHER_TAB
+            }}</q-tooltip>
           </q-btn>
           <q-btn
             dense
@@ -48,7 +54,9 @@
             color="negative"
             label="Cancel"
             @click="emit('cancel')"
-          />
+          >
+            <q-tooltip>{{ TRANSFER_TOOLTIP_CANCEL }}</q-tooltip>
+          </q-btn>
           <q-btn
             dense
             flat
@@ -56,7 +64,9 @@
             size="sm"
             label="Hide"
             @click="emit('hide')"
-          />
+          >
+            <q-tooltip>{{ TRANSFER_TOOLTIP_HIDE_PAUSED }}</q-tooltip>
+          </q-btn>
         </template>
         <q-btn
           v-else-if="canDismiss"
@@ -66,7 +76,9 @@
           size="sm"
           label="Dismiss"
           @click="emit('dismiss')"
-        />
+        >
+          <q-tooltip>{{ TRANSFER_TOOLTIP_DISMISS }}</q-tooltip>
+        </q-btn>
       </div>
     </div>
     <div class="text-caption download-progress-file q-mb-xs ellipsis">
@@ -95,6 +107,13 @@ import { computed } from "vue";
 import { useQuasar } from "quasar";
 
 import type { DownloadTransferStatus } from "@/types/fileTransfer";
+import {
+  TRANSFER_TOOLTIP_CANCEL,
+  TRANSFER_TOOLTIP_DISMISS,
+  TRANSFER_TOOLTIP_HIDE_PAUSED,
+  TRANSFER_TOOLTIP_OPEN_IN_OTHER_TAB,
+  TRANSFER_TOOLTIP_PAUSE,
+} from "@/constants/fileTransfer";
 
 const $q = useQuasar();
 

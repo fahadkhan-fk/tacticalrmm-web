@@ -17,10 +17,7 @@
           :disable="!canClearFinished"
           @click="emit('clear-finished')"
         >
-          <q-tooltip
-            >Remove completed, failed, and cancelled items from this
-            list.</q-tooltip
-          >
+          <q-tooltip>{{ TRANSFER_TOOLTIP_CLEAR_FINISHED }}</q-tooltip>
         </q-btn>
         <q-btn
           dense
@@ -31,9 +28,7 @@
           :disable="!canHideAll"
           @click="emit('hide-all')"
         >
-          <q-tooltip
-            >Hide paused items. Open Transfers to show them again.</q-tooltip
-          >
+          <q-tooltip>{{ TRANSFER_TOOLTIP_HIDE_PAUSED }}</q-tooltip>
         </q-btn>
         <q-btn
           dense
@@ -45,7 +40,7 @@
           :disable="!canPauseAll"
           @click="emit('pause-all')"
         >
-          <q-tooltip>Pause all active and queued downloads.</q-tooltip>
+          <q-tooltip>{{ TRANSFER_TOOLTIP_PAUSE_ALL }}</q-tooltip>
         </q-btn>
       </div>
     </div>
@@ -127,7 +122,9 @@
               size="sm"
               label="Pause"
               @click="emit('pause', item.id)"
-            />
+            >
+              <q-tooltip>{{ TRANSFER_TOOLTIP_PAUSE }}</q-tooltip>
+            </q-btn>
             <q-btn
               dense
               flat
@@ -136,7 +133,9 @@
               color="negative"
               label="Cancel"
               @click="emit('cancel', item.id)"
-            />
+            >
+              <q-tooltip>{{ TRANSFER_TOOLTIP_CANCEL }}</q-tooltip>
+            </q-btn>
           </div>
           <div
             v-else-if="item.status === 'paused'"
@@ -154,9 +153,9 @@
               "
               @click="emit('resume', item.id)"
             >
-              <q-tooltip v-if="item.ownedByOtherTab"
-                >Open in another tab</q-tooltip
-              >
+              <q-tooltip v-if="item.ownedByOtherTab">{{
+                TRANSFER_TOOLTIP_OPEN_IN_OTHER_TAB
+              }}</q-tooltip>
             </q-btn>
             <q-btn
               dense
@@ -166,7 +165,9 @@
               color="negative"
               label="Cancel"
               @click="emit('cancel', item.id)"
-            />
+            >
+              <q-tooltip>{{ TRANSFER_TOOLTIP_CANCEL }}</q-tooltip>
+            </q-btn>
             <q-btn
               dense
               flat
@@ -174,7 +175,9 @@
               size="sm"
               label="Hide"
               @click="emit('hide', item.id)"
-            />
+            >
+              <q-tooltip>{{ TRANSFER_TOOLTIP_HIDE_PAUSED }}</q-tooltip>
+            </q-btn>
           </div>
           <q-btn
             v-else-if="canDismissDownloadQueueItem(item.status)"
@@ -186,7 +189,7 @@
             class="q-mt-xs"
             @click="emit('dismiss', item.id)"
           >
-            <q-tooltip>Dismiss</q-tooltip>
+            <q-tooltip>{{ TRANSFER_TOOLTIP_DISMISS }}</q-tooltip>
           </q-btn>
           <q-btn
             v-else-if="item.status === 'queued'"
@@ -198,7 +201,7 @@
             class="q-mt-xs"
             @click="emit('dismiss', item.id)"
           >
-            <q-tooltip>Remove from queue</q-tooltip>
+            <q-tooltip>{{ TRANSFER_TOOLTIP_REMOVE_FROM_QUEUE }}</q-tooltip>
           </q-btn>
         </q-item-section>
       </q-item>
@@ -214,6 +217,16 @@ import type {
   DownloadQueueItem,
   DownloadQueueStatus,
 } from "@/types/filebrowser";
+import {
+  TRANSFER_TOOLTIP_CANCEL,
+  TRANSFER_TOOLTIP_CLEAR_FINISHED,
+  TRANSFER_TOOLTIP_DISMISS,
+  TRANSFER_TOOLTIP_HIDE_PAUSED,
+  TRANSFER_TOOLTIP_OPEN_IN_OTHER_TAB,
+  TRANSFER_TOOLTIP_PAUSE,
+  TRANSFER_TOOLTIP_PAUSE_ALL,
+  TRANSFER_TOOLTIP_REMOVE_FROM_QUEUE,
+} from "@/constants/fileTransfer";
 import { formatResumeWindowCaption } from "@/services/fileTransfer/transferQueuePersist";
 import {
   canDismissDownloadQueueItem,
