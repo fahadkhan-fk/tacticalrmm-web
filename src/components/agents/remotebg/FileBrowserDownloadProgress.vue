@@ -7,79 +7,20 @@
       <div class="text-subtitle2 text-weight-medium download-progress-title">
         Download
       </div>
-      <div class="row items-center q-gutter-xs">
-        <template v-if="isActive">
-          <q-btn
-            dense
-            flat
-            no-caps
-            size="sm"
-            label="Pause"
-            @click="emit('pause')"
-          >
-            <q-tooltip>{{ TRANSFER_TOOLTIP_PAUSE }}</q-tooltip>
-          </q-btn>
-          <q-btn
-            dense
-            flat
-            no-caps
-            size="sm"
-            color="negative"
-            label="Cancel"
-            @click="emit('cancel')"
-          >
-            <q-tooltip>{{ TRANSFER_TOOLTIP_CANCEL }}</q-tooltip>
-          </q-btn>
-        </template>
-        <template v-else-if="isPaused">
-          <q-btn
-            dense
-            flat
-            no-caps
-            size="sm"
-            color="primary"
-            label="Resume"
-            :disable="ownedByOtherTab"
-            @click="emit('resume')"
-          >
-            <q-tooltip v-if="ownedByOtherTab">{{
-              TRANSFER_TOOLTIP_OPEN_IN_OTHER_TAB
-            }}</q-tooltip>
-          </q-btn>
-          <q-btn
-            dense
-            flat
-            no-caps
-            size="sm"
-            color="negative"
-            label="Cancel"
-            @click="emit('cancel')"
-          >
-            <q-tooltip>{{ TRANSFER_TOOLTIP_CANCEL }}</q-tooltip>
-          </q-btn>
-          <q-btn
-            dense
-            flat
-            no-caps
-            size="sm"
-            label="Hide"
-            @click="emit('hide')"
-          >
-            <q-tooltip>{{ TRANSFER_TOOLTIP_HIDE_PAUSED }}</q-tooltip>
-          </q-btn>
-        </template>
-        <q-btn
-          v-else-if="canDismiss"
-          dense
-          flat
-          no-caps
-          size="sm"
-          label="Dismiss"
-          @click="emit('dismiss')"
-        >
-          <q-tooltip>{{ TRANSFER_TOOLTIP_DISMISS }}</q-tooltip>
-        </q-btn>
-      </div>
+      <FileBrowserTransferQueueActions
+        :mode="actionMode"
+        :pause-tooltip="TRANSFER_TOOLTIP_PAUSE"
+        :cancel-tooltip="TRANSFER_TOOLTIP_CANCEL"
+        :resume-disabled="!!ownedByOtherTab"
+        :owned-by-other-tab="!!ownedByOtherTab"
+        :dismiss-round="false"
+        wrap-class=""
+        @pause="emit('pause')"
+        @resume="emit('resume')"
+        @cancel="emit('cancel')"
+        @hide="emit('hide')"
+        @dismiss="emit('dismiss')"
+      />
     </div>
     <div class="text-caption download-progress-file q-mb-xs ellipsis">
       {{ fileName }}
@@ -94,7 +35,7 @@
     </div>
     <q-linear-progress
       :value="progress"
-      :color="progressColor"
+      :color="transferQueueProgressColor(status)"
       :track-color="$q.dark.isActive ? 'grey-8' : 'grey-4'"
       rounded
       size="6px"
@@ -106,14 +47,19 @@
 import { computed } from "vue";
 import { useQuasar } from "quasar";
 
+import FileBrowserTransferQueueActions, {
+  type TransferQueueActionMode,
+} from "@/components/agents/remotebg/FileBrowserTransferQueueActions.vue";
 import type { DownloadTransferStatus } from "@/types/fileTransfer";
 import {
+  TRANSFER_SLOT_WAIT_MESSAGE,
   TRANSFER_TOOLTIP_CANCEL,
-  TRANSFER_TOOLTIP_DISMISS,
-  TRANSFER_TOOLTIP_HIDE_PAUSED,
-  TRANSFER_TOOLTIP_OPEN_IN_OTHER_TAB,
   TRANSFER_TOOLTIP_PAUSE,
 } from "@/constants/fileTransfer";
+import {
+  downloadStatusLabel,
+  transferQueueProgressColor,
+} from "@/utils/filebrowser";
 
 const $q = useQuasar();
 
@@ -150,44 +96,50 @@ const canDismiss = computed(
     props.status === "cancelled",
 );
 
-const progressPercent = computed(() => Math.round(props.progress * 100));
-
-const progressColor = computed(() => {
-  if (props.status === "failed") return "negative";
-  if (props.status === "completed") return "positive";
-  if (props.status === "paused") return "warning";
-  if (props.status === "cancelled") return "grey-7";
-  return "primary";
+const actionMode = computed((): TransferQueueActionMode => {
+  if (isActive.value) return "active";
+  if (isPaused.value) return "paused";
+  if (canDismiss.value) return "terminal";
+  return "none";
 });
+
+const progressPercent = computed(() => Math.round(props.progress * 100));
 
 const statusLabel = computed(() => {
   if (
+    isActive.value &&
     props.errorMessage &&
-    (props.status === "initializing" ||
-      props.status === "downloading" ||
-      props.status === "completing") &&
-    /waiting for a free transfer slot/i.test(props.errorMessage)
+    (props.errorMessage === TRANSFER_SLOT_WAIT_MESSAGE ||
+      /waiting for a free transfer slot/i.test(props.errorMessage))
   ) {
     return props.errorMessage;
   }
-  switch (props.status) {
-    case "initializing":
-      return props.buildingArchive ? "Building archive…" : "Initializing…";
-    case "downloading":
-      return "Downloading…";
-    case "completing":
-      return "Verifying…";
-    case "completed":
-      return "Complete";
-    case "failed":
-      return props.errorMessage || "Download failed";
-    case "paused":
-      return props.ownedByOtherTab ? "Open in another tab" : "Paused";
-    case "cancelled":
-      return "Cancelled";
-    default:
-      return "";
+
+  if (props.status === "initializing" && props.buildingArchive) {
+    return "Building archive…";
   }
+  if (props.status === "completed") {
+    return "Complete";
+  }
+  if (props.status === "failed") {
+    return props.errorMessage || "Download failed";
+  }
+  if (props.status === "paused" && props.ownedByOtherTab) {
+    return "Open in another tab";
+  }
+  if (props.status === "idle") {
+    return "";
+  }
+  if (
+    props.status === "initializing" ||
+    props.status === "downloading" ||
+    props.status === "completing" ||
+    props.status === "paused" ||
+    props.status === "cancelled"
+  ) {
+    return downloadStatusLabel(props.status);
+  }
+  return "";
 });
 </script>
 

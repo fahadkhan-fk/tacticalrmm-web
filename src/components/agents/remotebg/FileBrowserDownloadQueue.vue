@@ -95,7 +95,7 @@
           >
             <q-linear-progress
               :value="item.progress"
-              :color="progressColor(item.status)"
+              :color="transferQueueProgressColor(item.status)"
               :track-color="$q.dark.isActive ? 'grey-8' : 'grey-4'"
               class="download-progress"
               rounded
@@ -111,98 +111,20 @@
           >
             {{ downloadStatusLabelForItem(item) }}
           </q-badge>
-          <div
-            v-if="isDownloadQueueItemActive(item.status)"
-            class="row q-gutter-xs q-mt-xs"
-          >
-            <q-btn
-              dense
-              flat
-              no-caps
-              size="sm"
-              label="Pause"
-              @click="emit('pause', item.id)"
-            >
-              <q-tooltip>{{ TRANSFER_TOOLTIP_PAUSE }}</q-tooltip>
-            </q-btn>
-            <q-btn
-              dense
-              flat
-              no-caps
-              size="sm"
-              color="negative"
-              label="Cancel"
-              @click="emit('cancel', item.id)"
-            >
-              <q-tooltip>{{ TRANSFER_TOOLTIP_CANCEL }}</q-tooltip>
-            </q-btn>
-          </div>
-          <div
-            v-else-if="item.status === 'paused'"
-            class="row q-gutter-xs q-mt-xs"
-          >
-            <q-btn
-              dense
-              flat
-              no-caps
-              size="sm"
-              color="primary"
-              label="Resume"
-              :disable="
-                item.recoveryHint === 'non_resumable' || !!item.ownedByOtherTab
-              "
-              @click="emit('resume', item.id)"
-            >
-              <q-tooltip v-if="item.ownedByOtherTab">{{
-                TRANSFER_TOOLTIP_OPEN_IN_OTHER_TAB
-              }}</q-tooltip>
-            </q-btn>
-            <q-btn
-              dense
-              flat
-              no-caps
-              size="sm"
-              color="negative"
-              label="Cancel"
-              @click="emit('cancel', item.id)"
-            >
-              <q-tooltip>{{ TRANSFER_TOOLTIP_CANCEL }}</q-tooltip>
-            </q-btn>
-            <q-btn
-              dense
-              flat
-              no-caps
-              size="sm"
-              label="Hide"
-              @click="emit('hide', item.id)"
-            >
-              <q-tooltip>{{ TRANSFER_TOOLTIP_HIDE_PAUSED }}</q-tooltip>
-            </q-btn>
-          </div>
-          <q-btn
-            v-else-if="canDismissDownloadQueueItem(item.status)"
-            dense
-            flat
-            round
-            icon="close"
-            size="sm"
-            class="q-mt-xs"
-            @click="emit('dismiss', item.id)"
-          >
-            <q-tooltip>{{ TRANSFER_TOOLTIP_DISMISS }}</q-tooltip>
-          </q-btn>
-          <q-btn
-            v-else-if="item.status === 'queued'"
-            dense
-            flat
-            round
-            icon="close"
-            size="sm"
-            class="q-mt-xs"
-            @click="emit('dismiss', item.id)"
-          >
-            <q-tooltip>{{ TRANSFER_TOOLTIP_REMOVE_FROM_QUEUE }}</q-tooltip>
-          </q-btn>
+          <FileBrowserTransferQueueActions
+            :mode="actionModeForItem(item)"
+            :pause-tooltip="TRANSFER_TOOLTIP_PAUSE"
+            :cancel-tooltip="TRANSFER_TOOLTIP_CANCEL"
+            :resume-disabled="
+              item.recoveryHint === 'non_resumable' || !!item.ownedByOtherTab
+            "
+            :owned-by-other-tab="!!item.ownedByOtherTab"
+            @pause="emit('pause', item.id)"
+            @resume="emit('resume', item.id)"
+            @cancel="emit('cancel', item.id)"
+            @hide="emit('hide', item.id)"
+            @dismiss="emit('dismiss', item.id)"
+          />
         </q-item-section>
       </q-item>
     </q-list>
@@ -213,19 +135,16 @@
 import { computed } from "vue";
 import { useQuasar } from "quasar";
 
-import type {
-  DownloadQueueItem,
-  DownloadQueueStatus,
-} from "@/types/filebrowser";
+import FileBrowserTransferQueueActions, {
+  type TransferQueueActionMode,
+} from "@/components/agents/remotebg/FileBrowserTransferQueueActions.vue";
+import type { DownloadQueueItem } from "@/types/filebrowser";
 import {
   TRANSFER_TOOLTIP_CANCEL,
   TRANSFER_TOOLTIP_CLEAR_FINISHED,
-  TRANSFER_TOOLTIP_DISMISS,
   TRANSFER_TOOLTIP_HIDE_PAUSED,
-  TRANSFER_TOOLTIP_OPEN_IN_OTHER_TAB,
   TRANSFER_TOOLTIP_PAUSE,
   TRANSFER_TOOLTIP_PAUSE_ALL,
-  TRANSFER_TOOLTIP_REMOVE_FROM_QUEUE,
 } from "@/constants/fileTransfer";
 import { formatResumeWindowCaption } from "@/services/fileTransfer/transferQueuePersist";
 import {
@@ -233,6 +152,8 @@ import {
   downloadStatusBadgeColor,
   downloadStatusLabel,
   isDownloadQueueItemActive,
+  transferQueueProgressColor,
+  transferQueueStatusLabelWithSlotWait,
 } from "@/utils/filebrowser";
 
 const $q = useQuasar();
@@ -265,14 +186,19 @@ function pausedCaption(item: DownloadQueueItem): string | null {
 }
 
 function downloadStatusLabelForItem(item: DownloadQueueItem): string {
-  if (
-    item.errorMessage &&
-    isDownloadQueueItemActive(item.status) &&
-    /waiting for a free transfer slot/i.test(item.errorMessage)
-  ) {
-    return "Waiting for slot…";
-  }
-  return downloadStatusLabel(item.status);
+  return transferQueueStatusLabelWithSlotWait(
+    downloadStatusLabel(item.status),
+    item.errorMessage,
+    isDownloadQueueItemActive(item.status),
+  );
+}
+
+function actionModeForItem(item: DownloadQueueItem): TransferQueueActionMode {
+  if (isDownloadQueueItemActive(item.status)) return "active";
+  if (item.status === "paused") return "paused";
+  if (canDismissDownloadQueueItem(item.status)) return "terminal";
+  if (item.status === "queued") return "queued";
+  return "none";
 }
 
 const canClearFinished = computed(() =>
@@ -297,14 +223,6 @@ function showItemProgress(item: DownloadQueueItem): boolean {
     item.status === "failed" ||
     item.status === "paused"
   );
-}
-
-function progressColor(status: DownloadQueueStatus): string {
-  if (status === "failed") return "negative";
-  if (status === "completed") return "positive";
-  if (status === "paused") return "warning";
-  if (status === "cancelled") return "grey-7";
-  return "primary";
 }
 </script>
 

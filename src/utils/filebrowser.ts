@@ -10,6 +10,10 @@ import {
   FILE_BROWSER_MAX_NAME_LENGTH,
   MAX_SEQUENTIAL_DOWNLOAD_FILES,
 } from "@/constants/filebrowser";
+import {
+  TRANSFER_SLOT_WAIT_LABEL,
+  TRANSFER_SLOT_WAIT_MESSAGE,
+} from "@/constants/fileTransfer";
 import { bytes2Human, formatDate } from "@/utils/format";
 import { AxiosError } from "axios";
 
@@ -725,22 +729,7 @@ export function uploadStatusLabel(status: UploadQueueStatus): string {
 }
 
 export function uploadStatusBadgeColor(status: UploadQueueStatus): string {
-  switch (status) {
-    case "queued":
-      return "grey-5";
-    case "uploading":
-      return "primary";
-    case "completed":
-      return "positive";
-    case "failed":
-      return "negative";
-    case "paused":
-      return "warning";
-    case "cancelled":
-      return "grey-7";
-    default:
-      return "grey-5";
-  }
+  return transferQueueBadgeColor(status);
 }
 
 export function classifyDownloadSelection(items: FileBrowserItem[]): {
@@ -795,9 +784,22 @@ export function downloadStatusLabel(status: DownloadQueueStatus): string {
 }
 
 export function downloadStatusBadgeColor(status: DownloadQueueStatus): string {
+  return transferQueueBadgeColor(status);
+}
+
+export function transferQueueProgressColor(status: string): string {
+  if (status === "failed") return "negative";
+  if (status === "completed") return "positive";
+  if (status === "paused") return "warning";
+  if (status === "cancelled") return "grey-7";
+  return "primary";
+}
+
+export function transferQueueBadgeColor(status: string): string {
   switch (status) {
     case "queued":
       return "grey-5";
+    case "uploading":
     case "initializing":
     case "downloading":
     case "completing":
@@ -813,6 +815,22 @@ export function downloadStatusBadgeColor(status: DownloadQueueStatus): string {
     default:
       return "grey-5";
   }
+}
+
+export function transferQueueStatusLabelWithSlotWait(
+  baseLabel: string,
+  errorMessage: string | undefined,
+  isActive: boolean,
+): string {
+  if (
+    isActive &&
+    errorMessage &&
+    (errorMessage === TRANSFER_SLOT_WAIT_MESSAGE ||
+      /waiting for a free transfer slot/i.test(errorMessage))
+  ) {
+    return TRANSFER_SLOT_WAIT_LABEL;
+  }
+  return baseLabel;
 }
 
 export function isDownloadQueueItemTerminal(

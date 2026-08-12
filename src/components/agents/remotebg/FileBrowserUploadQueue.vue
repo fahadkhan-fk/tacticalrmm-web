@@ -17,10 +17,7 @@
           :disable="!canClearFinished"
           @click="emit('clear-finished')"
         >
-          <q-tooltip
-            >Remove completed, failed, and cancelled items from this
-            list.</q-tooltip
-          >
+          <q-tooltip>{{ TRANSFER_TOOLTIP_CLEAR_FINISHED }}</q-tooltip>
         </q-btn>
         <q-btn
           dense
@@ -31,9 +28,7 @@
           :disable="!canHideAll"
           @click="emit('hide-all')"
         >
-          <q-tooltip
-            >Hide paused items. Open Transfers to show them again.</q-tooltip
-          >
+          <q-tooltip>{{ TRANSFER_TOOLTIP_HIDE_PAUSED }}</q-tooltip>
         </q-btn>
       </div>
     </div>
@@ -67,7 +62,7 @@
             v-if="
               item.errorMessage &&
               item.status === 'uploading' &&
-              /waiting for a free transfer slot/i.test(item.errorMessage)
+              item.errorMessage === TRANSFER_SLOT_WAIT_MESSAGE
             "
             caption
             class="upload-queue-item-meta"
@@ -84,7 +79,7 @@
           <div class="upload-progress-wrap q-mt-xs">
             <q-linear-progress
               :value="item.progress"
-              :color="progressColor(item.status)"
+              :color="transferQueueProgressColor(item.status)"
               :track-color="$q.dark.isActive ? 'grey-8' : 'grey-4'"
               class="upload-progress"
               rounded
@@ -100,104 +95,20 @@
           >
             {{ uploadStatusLabelForItem(item) }}
           </q-badge>
-          <div
-            v-if="item.status === 'uploading'"
-            class="row q-gutter-xs q-mt-xs"
-          >
-            <q-btn
-              dense
-              flat
-              no-caps
-              size="sm"
-              label="Pause"
-              @click="emit('pause', item.id)"
-            />
-            <q-btn
-              dense
-              flat
-              no-caps
-              size="sm"
-              color="negative"
-              label="Cancel"
-              @click="emit('cancel', item.id)"
-            />
-          </div>
-          <div
-            v-else-if="item.status === 'paused'"
-            class="row q-gutter-xs q-mt-xs"
-          >
-            <q-btn
-              v-if="item.recoveryHint === 'needs_file' && !item.file"
-              dense
-              flat
-              no-caps
-              size="sm"
-              color="primary"
-              label="Select file"
-              :disable="!!item.ownedByOtherTab"
-              @click="emit('select-file', item.id)"
-            >
-              <q-tooltip v-if="item.ownedByOtherTab"
-                >Open in another tab</q-tooltip
-              >
-            </q-btn>
-            <q-btn
-              v-else
-              dense
-              flat
-              no-caps
-              size="sm"
-              color="primary"
-              label="Resume"
-              :disable="!!item.ownedByOtherTab"
-              @click="emit('resume', item.id)"
-            >
-              <q-tooltip v-if="item.ownedByOtherTab"
-                >Open in another tab</q-tooltip
-              >
-            </q-btn>
-            <q-btn
-              dense
-              flat
-              no-caps
-              size="sm"
-              color="negative"
-              label="Cancel"
-              @click="emit('cancel', item.id)"
-            />
-            <q-btn
-              dense
-              flat
-              no-caps
-              size="sm"
-              label="Hide"
-              @click="emit('hide', item.id)"
-            />
-          </div>
-          <q-btn
-            v-else-if="isUploadQueueItemTerminal(item.status)"
-            dense
-            flat
-            round
-            icon="close"
-            size="sm"
-            class="q-mt-xs"
-            @click="emit('dismiss', item.id)"
-          >
-            <q-tooltip>Dismiss</q-tooltip>
-          </q-btn>
-          <q-btn
-            v-else-if="item.status === 'queued'"
-            dense
-            flat
-            round
-            icon="close"
-            size="sm"
-            class="q-mt-xs"
-            @click="emit('dismiss', item.id)"
-          >
-            <q-tooltip>Remove from queue</q-tooltip>
-          </q-btn>
+          <FileBrowserTransferQueueActions
+            :mode="actionModeForItem(item)"
+            :pause-tooltip="TRANSFER_TOOLTIP_PAUSE_UPLOAD"
+            :cancel-tooltip="TRANSFER_TOOLTIP_CANCEL_UPLOAD"
+            :resume-disabled="!!item.ownedByOtherTab"
+            :owned-by-other-tab="!!item.ownedByOtherTab"
+            :show-select-file="item.recoveryHint === 'needs_file' && !item.file"
+            @pause="emit('pause', item.id)"
+            @resume="emit('resume', item.id)"
+            @cancel="emit('cancel', item.id)"
+            @hide="emit('hide', item.id)"
+            @dismiss="emit('dismiss', item.id)"
+            @select-file="emit('select-file', item.id)"
+          />
         </q-item-section>
       </q-item>
     </q-list>
@@ -208,10 +119,23 @@
 import { computed } from "vue";
 import { useQuasar } from "quasar";
 
-import type { UploadQueueItem, UploadQueueStatus } from "@/types/filebrowser";
+import FileBrowserTransferQueueActions, {
+  type TransferQueueActionMode,
+} from "@/components/agents/remotebg/FileBrowserTransferQueueActions.vue";
+import type { UploadQueueItem } from "@/types/filebrowser";
+import {
+  TRANSFER_SLOT_WAIT_MESSAGE,
+  TRANSFER_TOOLTIP_CANCEL_UPLOAD,
+  TRANSFER_TOOLTIP_CLEAR_FINISHED,
+  TRANSFER_TOOLTIP_HIDE_PAUSED,
+  TRANSFER_TOOLTIP_PAUSE_UPLOAD,
+} from "@/constants/fileTransfer";
 import { formatResumeWindowCaption } from "@/services/fileTransfer/transferQueuePersist";
 import {
+  isUploadQueueItemActive,
   isUploadQueueItemTerminal,
+  transferQueueProgressColor,
+  transferQueueStatusLabelWithSlotWait,
   uploadStatusBadgeColor,
   uploadStatusLabel,
 } from "@/utils/filebrowser";
@@ -249,14 +173,19 @@ function resumeCaption(item: UploadQueueItem): string | null {
 }
 
 function uploadStatusLabelForItem(item: UploadQueueItem): string {
-  if (
-    item.status === "uploading" &&
-    item.errorMessage &&
-    /waiting for a free transfer slot/i.test(item.errorMessage)
-  ) {
-    return "Waiting for slot…";
-  }
-  return uploadStatusLabel(item.status);
+  return transferQueueStatusLabelWithSlotWait(
+    uploadStatusLabel(item.status),
+    item.errorMessage,
+    isUploadQueueItemActive(item.status),
+  );
+}
+
+function actionModeForItem(item: UploadQueueItem): TransferQueueActionMode {
+  if (item.status === "uploading") return "active";
+  if (item.status === "paused") return "paused";
+  if (isUploadQueueItemTerminal(item.status)) return "terminal";
+  if (item.status === "queued") return "queued";
+  return "none";
 }
 
 const canClearFinished = computed(() =>
@@ -266,14 +195,6 @@ const canClearFinished = computed(() =>
 const canHideAll = computed(() =>
   props.items.some((item) => item.status === "paused"),
 );
-
-function progressColor(status: UploadQueueStatus): string {
-  if (status === "failed") return "negative";
-  if (status === "completed") return "positive";
-  if (status === "paused") return "warning";
-  if (status === "cancelled") return "grey-7";
-  return "primary";
-}
 </script>
 
 <style scoped>

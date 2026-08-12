@@ -26,6 +26,10 @@ export const TRANSFER_TOOLTIP_PAUSE_ALL =
 export const TRANSFER_TOOLTIP_PAUSE = "Pause this download.";
 export const TRANSFER_TOOLTIP_CANCEL =
   "Cancel download and release the transfer slot.";
+export const TRANSFER_TOOLTIP_PAUSE_UPLOAD = "Pause this upload.";
+export const TRANSFER_TOOLTIP_CANCEL_UPLOAD =
+  "Cancel upload and release the transfer slot.";
 export const TRANSFER_TOOLTIP_OPEN_IN_OTHER_TAB = "Open in another tab";
 export const TRANSFER_TOOLTIP_DISMISS = "Dismiss";
 export const TRANSFER_TOOLTIP_REMOVE_FROM_QUEUE = "Remove from queue";
+export const TRANSFER_SLOT_WAIT_LABEL = "Waiting for slot…";
