@@ -228,6 +228,15 @@ import {
   runFileUploadTransfer,
 } from "@/services/fileTransfer/upload";
 import {
+  claimKeyForTransfer,
+  itemMatchesTransferClaimKey,
+  rekeyOrClaimTransferSession,
+  releaseTransferClaim,
+  setTransferAbortMode,
+  transferFailureErrorMessage,
+  transferIntegrityFailMessage,
+} from "@/services/fileTransfer/transferQueueHelpers";
+import {
   archiveDownloadHandleIdbKey,
   archiveDownloadResumeKey,
   clearDownloadResume,
@@ -1064,32 +1073,18 @@ function revealTransfers() {
 }
 
 function claimKeyForUpload(item: UploadQueueItem): string {
-  return transferClaimKey(props.agent_id, {
-    sessionId: item.sessionId,
-    queueId: item.id,
-  });
+  return claimKeyForTransfer(props.agent_id, item);
 }
 
 function claimKeyForDownload(item: DownloadQueueItem): string {
-  return transferClaimKey(props.agent_id, {
-    sessionId: item.sessionId,
-    queueId: item.id,
-  });
+  return claimKeyForTransfer(props.agent_id, item);
 }
 
 function itemMatchesClaimKey(
   item: { id: string; sessionId?: string },
   key: string,
 ): boolean {
-  if (
-    transferClaimKey(props.agent_id, {
-      sessionId: item.sessionId,
-      queueId: item.id,
-    }) === key
-  ) {
-    return true;
-  }
-  return transferClaimKey(props.agent_id, { queueId: item.id }) === key;
+  return itemMatchesTransferClaimKey(props.agent_id, item, key);
 }
 
 function applyRemoteOwnershipFlags(): void {
@@ -1117,20 +1112,14 @@ function releaseUploadClaim(
   itemId: string,
   reason: TransferReleaseReason,
 ): void {
-  const key = uploadClaimKeys.get(itemId);
-  if (!key) return;
-  uploadClaimKeys.delete(itemId);
-  getTabSync().release(key, reason);
+  releaseTransferClaim(uploadClaimKeys, itemId, reason, getTabSync());
 }
 
 function releaseDownloadClaim(
   itemId: string,
   reason: TransferReleaseReason,
 ): void {
-  const key = downloadClaimKeys.get(itemId);
-  if (!key) return;
-  downloadClaimKeys.delete(itemId);
-  getTabSync().release(key, reason);
+  releaseTransferClaim(downloadClaimKeys, itemId, reason, getTabSync());
 }
 
 function releaseAllLocalClaims(reason: TransferReleaseReason): void {
@@ -1157,14 +1146,32 @@ function broadcastCancelForItem(item: {
 function abortLocalTransferForClaimKey(key: string): void {
   for (const item of uploadQueue.value) {
     if (!itemMatchesClaimKey(item, key)) continue;
+
+    if (item.status === "paused") {
+      item.status = "cancelled";
+      item.hidden = false;
+      item.errorMessage = undefined;
+      item.ownedByOtherTab = false;
+      item.sessionId = undefined;
+      releaseUploadClaim(item.id, "cancel");
+      deleteLocalPausedEntry(props.agent_id, item.id);
+      if (item.file) {
+        clearUploadResume(props.agent_id, item.file, item.destinationPath);
+      }
+      continue;
+    }
+
     if (
       item.status === "uploading" ||
       item.status === "queued" ||
       isUploadQueueItemActive(item.status)
     ) {
-      const intent = uploadAbortIntents.get(item.id);
-      if (intent) intent.mode = "cancel";
-      uploadAbortControllers.get(item.id)?.abort();
+      setTransferAbortMode(
+        uploadAbortIntents,
+        uploadAbortControllers,
+        item.id,
+        "cancel",
+      );
       if (item.status === "queued") {
         item.status = "cancelled";
         item.ownedByOtherTab = false;
@@ -1175,10 +1182,43 @@ function abortLocalTransferForClaimKey(key: string): void {
   }
   for (const item of downloadQueue.value) {
     if (!itemMatchesClaimKey(item, key)) continue;
+
+    if (item.status === "paused") {
+      const resumeScopeKey =
+        item.kind === "archive" && item.archivePaths?.length
+          ? archiveDownloadResumeKey(props.agent_id, item.archivePaths)
+          : item.sourcePath;
+      const handleKey =
+        item.kind === "archive" && item.archivePaths?.length
+          ? archiveDownloadHandleIdbKey(props.agent_id, item.archivePaths)
+          : downloadHandleIdbKey(props.agent_id, item.sourcePath);
+      const sid = item.sessionId;
+
+      item.status = "cancelled";
+      item.hidden = false;
+      item.errorMessage = undefined;
+      item.ownedByOtherTab = false;
+      item.sessionId = undefined;
+      releaseDownloadClaim(item.id, "cancel");
+      deleteLocalPausedEntry(props.agent_id, item.id);
+      if (sid) {
+        clearDownloadResumeBySessionId(sid);
+      }
+      clearDownloadResume(props.agent_id, resumeScopeKey);
+      void clearTransferPersistence(props.agent_id, sid, {
+        handleKey,
+        localQueueId: item.id,
+      });
+      continue;
+    }
+
     if (item.status === "queued" || isDownloadQueueItemActive(item.status)) {
-      const intent = downloadAbortIntents.get(item.id);
-      if (intent) intent.mode = "cancel";
-      downloadAbortControllers.get(item.id)?.abort();
+      setTransferAbortMode(
+        downloadAbortIntents,
+        downloadAbortControllers,
+        item.id,
+        "cancel",
+      );
       if (item.status === "queued") {
         item.status = "cancelled";
         item.ownedByOtherTab = false;
@@ -1621,20 +1661,13 @@ async function runSingleDownload(itemId: string): Promise<void> {
         if (current.errorMessage === TRANSFER_SLOT_WAIT_MESSAGE) {
           current.errorMessage = undefined;
         }
-        const prevKey = downloadClaimKeys.get(itemId);
-        const nextKey = transferClaimKey(props.agent_id, {
+        rekeyOrClaimTransferSession({
+          agentId: props.agent_id,
+          itemId,
           sessionId,
-          queueId: itemId,
+          claimKeys: downloadClaimKeys,
+          tabSync: getTabSync(),
         });
-        if (prevKey && prevKey !== nextKey) {
-          if (getTabSync().rekeyClaim(prevKey, nextKey)) {
-            downloadClaimKeys.set(itemId, nextKey);
-          }
-        } else if (!prevKey) {
-          if (getTabSync().tryClaim(nextKey)) {
-            downloadClaimKeys.set(itemId, nextKey);
-          }
-        }
       },
       onProgress: ({
         committedOffset,
@@ -1751,8 +1784,8 @@ async function runSingleDownload(itemId: string): Promise<void> {
       current.status = mode === "cancel" ? "cancelled" : "paused";
       current.errorMessage = undefined;
       current.ownedByOtherTab = false;
-      releaseDownloadClaim(itemId, mode === "cancel" ? "cancel" : "pause");
       if (mode === "cancel") {
+        releaseDownloadClaim(itemId, "cancel");
         const sid = current.sessionId;
         current.sessionId = undefined;
         if (sid) {
@@ -1785,12 +1818,7 @@ async function runSingleDownload(itemId: string): Promise<void> {
     current.hidden = false;
     current.ownedByOtherTab = false;
     releaseDownloadClaim(itemId, "fail");
-    const integrityFailed =
-      err instanceof Error &&
-      /integrity check failed|sha-256 mismatch/i.test(err.message);
-    current.errorMessage = integrityFailed
-      ? "Download failed: file integrity check did not match."
-      : getFileBrowserErrorMessage(err, "Download failed.");
+    current.errorMessage = transferFailureErrorMessage(err, "download");
     if (downloadBatchIsSingle.value && downloadQueue.value.length === 1) {
       notifyError(current.errorMessage);
     }
@@ -1875,18 +1903,21 @@ function abortDownloadItem(
   id: string,
   mode: TransferAbortIntent["mode"],
 ): void {
-  const intent = downloadAbortIntents.get(id);
-  if (intent) intent.mode = mode;
-  downloadAbortControllers.get(id)?.abort();
+  setTransferAbortMode(
+    downloadAbortIntents,
+    downloadAbortControllers,
+    id,
+    mode,
+  );
 
   const item = findDownloadItem(id);
   if (item && item.status === "queued") {
     item.status = mode === "cancel" ? "cancelled" : "paused";
     item.ownedByOtherTab = false;
-    releaseDownloadClaim(id, mode === "cancel" ? "cancel" : "pause");
     if (mode === "pause") {
       void persistDownloadQueueMeta(props.agent_id, item);
     } else {
+      releaseDownloadClaim(id, "cancel");
       deleteLocalPausedEntry(props.agent_id, item.id);
       broadcastCancelForItem(item);
     }
@@ -2414,20 +2445,13 @@ async function runSingleUpload(itemId: string): Promise<void> {
           if (current.errorMessage === TRANSFER_SLOT_WAIT_MESSAGE) {
             current.errorMessage = undefined;
           }
-          const prevKey = uploadClaimKeys.get(itemId);
-          const nextKey = transferClaimKey(props.agent_id, {
+          rekeyOrClaimTransferSession({
+            agentId: props.agent_id,
+            itemId,
             sessionId,
-            queueId: itemId,
+            claimKeys: uploadClaimKeys,
+            tabSync: getTabSync(),
           });
-          if (prevKey && prevKey !== nextKey) {
-            if (getTabSync().rekeyClaim(prevKey, nextKey)) {
-              uploadClaimKeys.set(itemId, nextKey);
-            }
-          } else if (!prevKey) {
-            if (getTabSync().tryClaim(nextKey)) {
-              uploadClaimKeys.set(itemId, nextKey);
-            }
-          }
         },
         onProgress: (p) => {
           updateUploadProgress(itemId, p);
@@ -2448,8 +2472,7 @@ async function runSingleUpload(itemId: string): Promise<void> {
       current.sessionId = undefined;
       current.ownedByOtherTab = false;
       releaseUploadClaim(itemId, "fail");
-      current.errorMessage =
-        "Upload failed: file integrity check did not match.";
+      current.errorMessage = transferIntegrityFailMessage("upload");
       if (!multiBatch) {
         notifyError(current.errorMessage);
       }
@@ -2481,8 +2504,8 @@ async function runSingleUpload(itemId: string): Promise<void> {
       current.status = mode === "cancel" ? "cancelled" : "paused";
       current.errorMessage = undefined;
       current.ownedByOtherTab = false;
-      releaseUploadClaim(itemId, mode === "cancel" ? "cancel" : "pause");
       if (mode === "cancel") {
+        releaseUploadClaim(itemId, "cancel");
         const sid = current.sessionId;
         current.sessionId = undefined;
         if (sid) {
@@ -2505,12 +2528,7 @@ async function runSingleUpload(itemId: string): Promise<void> {
     current.hidden = false;
     current.ownedByOtherTab = false;
     releaseUploadClaim(itemId, "fail");
-    const integrityFailed =
-      err instanceof Error &&
-      /integrity check failed|sha-256 mismatch/i.test(err.message);
-    current.errorMessage = integrityFailed
-      ? "Upload failed: file integrity check did not match."
-      : getFileBrowserErrorMessage(err, "Upload failed.");
+    current.errorMessage = transferFailureErrorMessage(err, "upload");
     if (!multiBatch) {
       notifyError(`"${item.name}": ${current.errorMessage}`);
     }
@@ -2570,18 +2588,16 @@ async function processUploadQueue(): Promise<void> {
 }
 
 function abortUploadItem(id: string, mode: TransferAbortIntent["mode"]): void {
-  const intent = uploadAbortIntents.get(id);
-  if (intent) intent.mode = mode;
-  uploadAbortControllers.get(id)?.abort();
+  setTransferAbortMode(uploadAbortIntents, uploadAbortControllers, id, mode);
 
   const item = findUploadItem(id);
   if (item && item.status === "queued") {
     item.status = mode === "cancel" ? "cancelled" : "paused";
     item.ownedByOtherTab = false;
-    releaseUploadClaim(id, mode === "cancel" ? "cancel" : "pause");
     if (mode === "pause") {
       void persistUploadQueueMeta(props.agent_id, item);
     } else {
+      releaseUploadClaim(id, "cancel");
       deleteLocalPausedEntry(props.agent_id, item.id);
       broadcastCancelForItem(item);
     }
