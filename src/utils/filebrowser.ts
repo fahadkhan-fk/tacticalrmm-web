@@ -11,6 +11,8 @@ import {
   MAX_SEQUENTIAL_DOWNLOAD_FILES,
 } from "@/constants/filebrowser";
 import {
+  TRANSFER_RECONNECTING_LABEL,
+  TRANSFER_RECONNECTING_MESSAGE,
   TRANSFER_SLOT_WAIT_LABEL,
   TRANSFER_SLOT_WAIT_MESSAGE,
 } from "@/constants/fileTransfer";
@@ -822,13 +824,17 @@ export function transferQueueStatusLabelWithSlotWait(
   errorMessage: string | undefined,
   isActive: boolean,
 ): string {
+  if (!isActive || !errorMessage) {
+    return baseLabel;
+  }
   if (
-    isActive &&
-    errorMessage &&
-    (errorMessage === TRANSFER_SLOT_WAIT_MESSAGE ||
-      /waiting for a free transfer slot/i.test(errorMessage))
+    errorMessage === TRANSFER_SLOT_WAIT_MESSAGE ||
+    /waiting for a free transfer slot/i.test(errorMessage)
   ) {
     return TRANSFER_SLOT_WAIT_LABEL;
+  }
+  if (errorMessage === TRANSFER_RECONNECTING_MESSAGE) {
+    return TRANSFER_RECONNECTING_LABEL;
   }
   return baseLabel;
 }

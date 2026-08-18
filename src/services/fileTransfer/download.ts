@@ -38,9 +38,12 @@ import {
   saveDownloadResume,
 } from "./resume";
 import {
+  RetryableTransferError,
   type TransferSlotWaitInfo,
+  type TransientRetryInfo,
   sleepAbortable,
   withTransferSessionRetry,
+  withTransientRetry,
 } from "./sessionLimit";
 
 export interface RunFileDownloadOptions {
@@ -53,6 +56,7 @@ export interface RunFileDownloadOptions {
   knownSessionId?: string;
   onArchiveBuilding?: () => void;
   onWaitingForSlot?: (info: TransferSlotWaitInfo) => void;
+  onRetrying?: (info: TransientRetryInfo) => void;
 }
 
 interface DownloadSink {
@@ -133,6 +137,76 @@ function assertMemoryDownloadAllowed(
         `for this browser, which must buffer it in memory (limit ${limitMiB} MiB). ` +
         "Use Chrome or Edge to stream large downloads directly to disk.",
     );
+  }
+}
+
+interface StreamDownloadChunksParams {
+  agentId: string;
+  sessionId: string;
+  totalSize: number;
+  startOffset: number;
+  sink: DownloadSink;
+  hasher: ReturnType<typeof createSha256Hasher>;
+  signal?: AbortSignal;
+  onProgress?: (progress: FileTransferProgress) => void;
+  onRetrying?: (info: TransientRetryInfo) => void;
+}
+
+async function streamDownloadChunks(
+  params: StreamDownloadChunksParams,
+): Promise<void> {
+  const {
+    agentId,
+    sessionId,
+    totalSize,
+    sink,
+    hasher,
+    signal,
+    onProgress,
+    onRetrying,
+  } = params;
+  let committedOffset = params.startOffset;
+
+  while (committedOffset < totalSize) {
+    if (signal?.aborted) {
+      throw new DOMException("Download aborted", "AbortError");
+    }
+
+    const offset = committedOffset;
+    const { data: chunkBuf, newCommitted } = await withTransientRetry(
+      async () => {
+        const { data, contentRange } = await getAgentFileDownloadChunk(
+          agentId,
+          sessionId,
+          offset,
+          signal,
+        );
+        const range = parseContentRangeHeader(contentRange);
+        const expectedLen = range.end - range.start + 1;
+        if (data.byteLength !== expectedLen) {
+          throw new RetryableTransferError(
+            `Chunk size mismatch: received ${data.byteLength}, expected ${expectedLen}`,
+          );
+        }
+        return { data, newCommitted: range.end + 1 };
+      },
+      { signal, onRetry: onRetrying },
+    );
+
+    hashBytes(hasher, chunkBuf);
+
+    await withTransientRetry(
+      () => ackAgentFileDownloadChunk(agentId, sessionId, newCommitted),
+      { signal, onRetry: onRetrying },
+    );
+    await sink.writeChunk(chunkBuf);
+    committedOffset = newCommitted;
+
+    onProgress?.({
+      acceptedOffset: committedOffset,
+      committedOffset,
+      totalSize,
+    });
   }
 }
 
@@ -280,6 +354,7 @@ export async function runFileDownloadTransfer(
     onSession,
     knownSessionId,
     onWaitingForSlot,
+    onRetrying,
   } = options;
   const fileName = fileNameFromPath(sourcePath);
 
@@ -341,7 +416,7 @@ export async function runFileDownloadTransfer(
     onSession?.(sessionIdValue);
     const totalSize = initData.total_size;
     const chunkSize = initData.chunk_size;
-    let committedOffset =
+    const committedOffset =
       initData.committed_offset || effectiveResumeOffset || 0;
 
     assertMemoryDownloadAllowed(usesMemoryBuffer, totalSize);
@@ -364,38 +439,17 @@ export async function runFileDownloadTransfer(
 
     onStatus?.("downloading");
 
-    while (committedOffset < totalSize) {
-      if (signal?.aborted) {
-        throw new DOMException("Download aborted", "AbortError");
-      }
-
-      const { data: chunkBuf, contentRange } = await getAgentFileDownloadChunk(
-        agentId,
-        sessionIdValue,
-        committedOffset,
-        signal,
-      );
-      const range = parseContentRangeHeader(contentRange);
-      const expectedLen = range.end - range.start + 1;
-      if (chunkBuf.byteLength !== expectedLen) {
-        throw new Error(
-          `Chunk size mismatch: received ${chunkBuf.byteLength}, expected ${expectedLen}`,
-        );
-      }
-
-      hashBytes(hasher, chunkBuf);
-      const newCommitted = range.end + 1;
-
-      await ackAgentFileDownloadChunk(agentId, sessionIdValue, newCommitted);
-      await sink.writeChunk(chunkBuf);
-      committedOffset = newCommitted;
-
-      onProgress?.({
-        acceptedOffset: committedOffset,
-        committedOffset,
-        totalSize,
-      });
-    }
+    await streamDownloadChunks({
+      agentId,
+      sessionId: sessionIdValue,
+      totalSize,
+      startOffset: committedOffset,
+      sink,
+      hasher,
+      signal,
+      onProgress,
+      onRetrying,
+    });
 
     onStatus?.("completing");
     const completeData = await completeAgentFileDownload(
@@ -453,6 +507,7 @@ export async function runArchiveDownloadTransfer(
     knownSessionId,
     onArchiveBuilding,
     onWaitingForSlot,
+    onRetrying,
   } = options;
   const resumeScopeKey = archiveDownloadResumeKey(agentId, paths);
   const fileName = suggestedFileName.trim() || "download.zip";
@@ -577,7 +632,7 @@ export async function runArchiveDownloadTransfer(
 
     assertMemoryDownloadAllowed(usesMemoryBuffer, totalSize);
 
-    let committedOffset =
+    const committedOffset =
       initData.committed_offset || effectiveResumeOffset || 0;
 
     saveDownloadResume(agentId, resumeScopeKey, {
@@ -598,38 +653,17 @@ export async function runArchiveDownloadTransfer(
 
     onStatus?.("downloading");
 
-    while (committedOffset < totalSize) {
-      if (signal?.aborted) {
-        throw new DOMException("Download aborted", "AbortError");
-      }
-
-      const { data: chunkBuf, contentRange } = await getAgentFileDownloadChunk(
-        agentId,
-        sessionIdValue,
-        committedOffset,
-        signal,
-      );
-      const range = parseContentRangeHeader(contentRange);
-      const expectedLen = range.end - range.start + 1;
-      if (chunkBuf.byteLength !== expectedLen) {
-        throw new Error(
-          `Chunk size mismatch: received ${chunkBuf.byteLength}, expected ${expectedLen}`,
-        );
-      }
-
-      hashBytes(hasher, chunkBuf);
-      const newCommitted = range.end + 1;
-
-      await ackAgentFileDownloadChunk(agentId, sessionIdValue, newCommitted);
-      await sink.writeChunk(chunkBuf);
-      committedOffset = newCommitted;
-
-      onProgress?.({
-        acceptedOffset: committedOffset,
-        committedOffset,
-        totalSize,
-      });
-    }
+    await streamDownloadChunks({
+      agentId,
+      sessionId: sessionIdValue,
+      totalSize,
+      startOffset: committedOffset,
+      sink,
+      hasher,
+      signal,
+      onProgress,
+      onRetrying,
+    });
 
     onStatus?.("completing");
     const completeData = await completeAgentFileDownload(

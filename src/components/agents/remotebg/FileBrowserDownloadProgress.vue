@@ -52,6 +52,7 @@ import FileBrowserTransferQueueActions, {
 } from "@/components/agents/remotebg/FileBrowserTransferQueueActions.vue";
 import type { DownloadTransferStatus } from "@/types/fileTransfer";
 import {
+  TRANSFER_RECONNECTING_MESSAGE,
   TRANSFER_SLOT_WAIT_MESSAGE,
   TRANSFER_TOOLTIP_CANCEL,
   TRANSFER_TOOLTIP_PAUSE,
@@ -110,6 +111,7 @@ const statusLabel = computed(() => {
     isActive.value &&
     props.errorMessage &&
     (props.errorMessage === TRANSFER_SLOT_WAIT_MESSAGE ||
+      props.errorMessage === TRANSFER_RECONNECTING_MESSAGE ||
       /waiting for a free transfer slot/i.test(props.errorMessage))
   ) {
     return props.errorMessage;

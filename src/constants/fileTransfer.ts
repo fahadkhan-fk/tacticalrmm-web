@@ -1,4 +1,4 @@
-export const FILE_TRANSFER_DEFAULT_CHUNK_SIZE = 8 * 1024 * 1024;
+export const FILE_TRANSFER_DEFAULT_CHUNK_SIZE = 16 * 1024 * 1024;
 export const FILE_TRANSFER_DOWNLOAD_CHUNK_TIMEOUT_MS = 120_000;
 export const FILE_TRANSFER_UPLOAD_CHUNK_TIMEOUT_MS = 300_000;
 export const ARCHIVE_STATUS_POLL_INTERVAL_MS = 1_500;
@@ -17,6 +17,8 @@ export const FILE_TRANSFER_SLOT_RETRY_BASE_MS = 2_000;
 export const FILE_TRANSFER_SLOT_RETRY_MAX_MS = 30_000;
 export const TRANSFER_SLOT_WAIT_MESSAGE =
   "Waiting for a free transfer slot. Cancel or finish a paused transfer to continue.";
+export const TRANSFER_RECONNECTING_MESSAGE =
+  "Connection interrupted — reconnecting…";
 export const TRANSFER_TOOLTIP_CLEAR_FINISHED =
   "Remove completed, failed, and cancelled items from this list.";
 export const TRANSFER_TOOLTIP_HIDE_PAUSED =
@@ -33,3 +35,4 @@ export const TRANSFER_TOOLTIP_OPEN_IN_OTHER_TAB = "Open in another tab";
 export const TRANSFER_TOOLTIP_DISMISS = "Dismiss";
 export const TRANSFER_TOOLTIP_REMOVE_FROM_QUEUE = "Remove from queue";
 export const TRANSFER_SLOT_WAIT_LABEL = "Waiting for slot…";
+export const TRANSFER_RECONNECTING_LABEL = "Reconnecting…";

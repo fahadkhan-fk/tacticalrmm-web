@@ -208,7 +208,10 @@ import {
   FILE_BROWSER_LOAD_MORE_THRESHOLD,
   FILE_BROWSER_FILTER_DEBOUNCE_MS,
 } from "@/constants/filebrowser";
-import { FILE_TRANSFER_DEFAULT_CHUNK_SIZE } from "@/constants/fileTransfer";
+import {
+  FILE_TRANSFER_DEFAULT_CHUNK_SIZE,
+  TRANSFER_RECONNECTING_MESSAGE,
+} from "@/constants/fileTransfer";
 import type {
   DownloadQueueItem,
   FileBrowserDeleteResult,
@@ -1648,7 +1651,10 @@ async function runSingleDownload(itemId: string): Promise<void> {
         if (current.status === "initializing") {
           current.status = "downloading";
         }
-        if (current.errorMessage === TRANSFER_SLOT_WAIT_MESSAGE) {
+        if (
+          current.errorMessage === TRANSFER_SLOT_WAIT_MESSAGE ||
+          current.errorMessage === TRANSFER_RECONNECTING_MESSAGE
+        ) {
           current.errorMessage = undefined;
         }
       },
@@ -1664,10 +1670,16 @@ async function runSingleDownload(itemId: string): Promise<void> {
         current.status = status;
         if (
           (status === "downloading" || status === "completing") &&
-          current.errorMessage === TRANSFER_SLOT_WAIT_MESSAGE
+          (current.errorMessage === TRANSFER_SLOT_WAIT_MESSAGE ||
+            current.errorMessage === TRANSFER_RECONNECTING_MESSAGE)
         ) {
           current.errorMessage = undefined;
         }
+      },
+      onRetrying: () => {
+        const current = findDownloadItem(itemId);
+        if (!current) return;
+        current.errorMessage = TRANSFER_RECONNECTING_MESSAGE;
       },
     };
 
