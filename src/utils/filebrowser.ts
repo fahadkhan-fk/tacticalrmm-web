@@ -17,6 +17,7 @@ import {
   TRANSFER_SLOT_WAIT_MESSAGE,
 } from "@/constants/fileTransfer";
 import { bytes2Human, formatDate } from "@/utils/format";
+import { getAxiosErrorDetail } from "@/utils/apiError";
 import { AxiosError } from "axios";
 
 export function isFolderRow(row: FileBrowserItem): boolean {
@@ -204,35 +205,15 @@ export function getListFilesErrorMessage(err: unknown): string {
       return "Request was cancelled.";
     }
     if (err.response?.status === 403) {
-      const data = err.response.data as
-        | { detail?: string }
-        | string
-        | undefined;
-      if (typeof data === "object" && data?.detail) {
-        return formatFileBrowserApiErrorMessage(data.detail);
+      const detail = getAxiosErrorDetail(err);
+      if (detail) {
+        return formatFileBrowserApiErrorMessage(detail);
       }
       return "You do not have permission to use the file browser.";
     }
-    const data = err.response?.data;
-    if (typeof data === "string" && data.trim()) {
-      return formatFileBrowserApiErrorMessage(data);
-    }
-    if (data && typeof data === "object") {
-      const record = data as Record<string, unknown>;
-      for (const key of ["detail", "message", "error"]) {
-        const value = record[key];
-        if (typeof value === "string" && value.trim()) {
-          return formatFileBrowserApiErrorMessage(value);
-        }
-      }
-    }
-    if (err.response?.statusText) {
-      if (
-        err.message &&
-        !/^Request failed with status code \d+$/i.test(err.message)
-      ) {
-        return formatFileBrowserApiErrorMessage(err.message);
-      }
+    const detail = getAxiosErrorDetail(err);
+    if (detail) {
+      return formatFileBrowserApiErrorMessage(detail);
     }
   } else if (err instanceof Error && err.message.trim()) {
     return formatFileBrowserApiErrorMessage(err.message);

@@ -169,7 +169,8 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, toRef, watch } from "vue";
-import { copyToClipboard, useQuasar } from "quasar";
+import { useQuasar } from "quasar";
+import { useTimeoutFn } from "@vueuse/core";
 
 import {
   createAgentFileFolder,
@@ -296,6 +297,7 @@ import {
   notifySuccess,
   notifyWarning,
 } from "@/utils/notify";
+import { copyOutput } from "@/utils/helpers";
 
 const props = withDefaults(
   defineProps<{
@@ -317,7 +319,6 @@ const listError = ref<string | null>(null);
 const currentPath = ref("");
 const search = ref("");
 const committedFilter = ref("");
-let filterDebounceTimer: ReturnType<typeof window.setTimeout> | null = null;
 const selectedRows = ref<FileBrowserItem[]>([]);
 const toolbarRef = ref<{ focusSearch: () => void } | null>(null);
 const rootRef = ref<HTMLElement | null>(null);
@@ -512,13 +513,6 @@ const tableNoDataLabel = computed(() => {
   return "Folder is empty";
 });
 
-function cancelFilterDebounce() {
-  if (filterDebounceTimer != null) {
-    window.clearTimeout(filterDebounceTimer);
-    filterDebounceTimer = null;
-  }
-}
-
 function clearFolderFilter() {
   cancelFilterDebounce();
   search.value = "";
@@ -543,6 +537,15 @@ function applyCommittedFilter(nextRaw: string) {
   selectedRows.value = [];
   void refresh();
 }
+
+const { start: scheduleFilterDebounce, stop: cancelFilterDebounce } =
+  useTimeoutFn(
+    () => {
+      applyCommittedFilter(normalizeFileBrowserFilterQuery(search.value));
+    },
+    FILE_BROWSER_FILTER_DEBOUNCE_MS,
+    { immediate: false },
+  );
 
 function resetListPagingState() {
   listPage.value = 1;
@@ -787,12 +790,7 @@ watch(search, (value) => {
     }
     return;
   }
-  cancelFilterDebounce();
-  filterDebounceTimer = window.setTimeout(() => {
-    filterDebounceTimer = null;
-    if (normalizeFileBrowserFilterQuery(search.value) !== next) return;
-    applyCommittedFilter(next);
-  }, FILE_BROWSER_FILTER_DEBOUNCE_MS);
+  scheduleFilterDebounce();
 });
 
 watch(
@@ -2173,17 +2171,12 @@ function copyPathsToClipboard(items: FileBrowserItem[]) {
     return;
   }
   const text = items.map((r) => r.path).join("\n");
-  copyToClipboard(text)
-    .then(() => {
-      notifySuccess(
-        items.length === 1
-          ? "Path copied to clipboard."
-          : `${items.length} paths copied to clipboard.`,
-      );
-    })
-    .catch(() => {
-      notifyError("Unable to copy to clipboard.");
-    });
+  void copyOutput(text, {
+    successMessage:
+      items.length === 1
+        ? "Path copied to clipboard."
+        : `${items.length} paths copied to clipboard.`,
+  });
 }
 
 function copySelectedPathsToClipboard() {

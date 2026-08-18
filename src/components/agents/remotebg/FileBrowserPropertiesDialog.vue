@@ -175,11 +175,10 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import { copyToClipboard } from "quasar";
 
 import type { FileBrowserItem } from "@/types/filebrowser";
 import { bytes2Human } from "@/utils/format";
-import { notifyError, notifySuccess } from "@/utils/notify";
+import { copyOutput } from "@/utils/helpers";
 
 const props = defineProps<{
   modelValue: boolean;
@@ -201,9 +200,7 @@ const locationText = computed(() => {
 function copyText(value: string, successMessage: string) {
   const text = value?.trim();
   if (!text || text === "—") return;
-  copyToClipboard(text)
-    .then(() => notifySuccess(successMessage))
-    .catch(() => notifyError("Unable to copy to clipboard."));
+  void copyOutput(text, { successMessage });
 }
 
 function formatBool(value: boolean | undefined): string {

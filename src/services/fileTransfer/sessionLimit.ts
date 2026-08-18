@@ -5,6 +5,7 @@ import {
   FILE_TRANSFER_SLOT_RETRY_MAX_MS,
   TRANSFER_SLOT_WAIT_MESSAGE,
 } from "@/constants/fileTransfer";
+import { getAxiosErrorDetail } from "@/utils/apiError";
 
 export { TRANSFER_SLOT_WAIT_MESSAGE };
 
@@ -22,18 +23,9 @@ export function isTransferSessionLimitError(err: unknown): boolean {
   if (!(err instanceof AxiosError)) return false;
   if (err.response?.status !== 429) return false;
 
-  const data = err.response.data;
-  if (typeof data === "string" && /too many concurrent/i.test(data)) {
+  const detail = getAxiosErrorDetail(err);
+  if (detail && /too many concurrent/i.test(detail)) {
     return true;
-  }
-  if (data && typeof data === "object") {
-    const record = data as Record<string, unknown>;
-    for (const key of ["detail", "message", "error"]) {
-      const value = record[key];
-      if (typeof value === "string" && /too many concurrent/i.test(value)) {
-        return true;
-      }
-    }
   }
   return true;
 }
