@@ -3,11 +3,8 @@ import { AxiosError } from "axios";
 import {
   FILE_TRANSFER_SLOT_RETRY_BASE_MS,
   FILE_TRANSFER_SLOT_RETRY_MAX_MS,
-  TRANSFER_SLOT_WAIT_MESSAGE,
 } from "@/constants/fileTransfer";
 import { getAxiosErrorDetail } from "@/utils/apiError";
-
-export { TRANSFER_SLOT_WAIT_MESSAGE };
 
 export interface TransferSlotWaitInfo {
   attempt: number;

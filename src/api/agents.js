@@ -426,15 +426,10 @@ export async function fetchAgentFiles(
   if (nameFilter) {
     params.filter = nameFilter;
   }
-  try {
-    const { data } = await axios.get(`${baseUrl}/${agent_id}/files/`, {
-      params,
-    });
-    return data;
-  } catch (e) {
-    console.error(e);
-    throw e;
-  }
+  const { data } = await axios.get(`${baseUrl}/${agent_id}/files/`, {
+    params,
+  });
+  return data;
 }
 
 export async function fetchAgentFilesAll(
@@ -487,70 +482,47 @@ export async function fetchAgentFilesAll(
 
 export async function fetchAgentFileProperties(agent_id, path, platform) {
   const normalizedPath = normalizeAgentListPath(path, platform);
-  try {
-    const { data } = await axios.get(
-      `${baseUrl}/${agent_id}/files/properties/`,
-      {
-        params: { path: normalizedPath },
-        timeout: 60_000,
-      },
-    );
-    return data;
-  } catch (e) {
-    console.error(e);
-    throw e;
-  }
+  const { data } = await axios.get(`${baseUrl}/${agent_id}/files/properties/`, {
+    params: { path: normalizedPath },
+    timeout: 60_000,
+  });
+  return data;
 }
 
 export async function createAgentFileFolder(agent_id, path, name, platform) {
   const normalizedPath = normalizeAgentListPath(path, platform);
-  try {
-    const { data } = await axios.post(
-      `${baseUrl}/${agent_id}/files/folder/`,
-      {
-        path: normalizedPath,
-        name,
-      },
-      { skipGlobalErrorNotify: true },
-    );
-    return data;
-  } catch (e) {
-    console.error(e);
-    throw e;
-  }
+  const { data } = await axios.post(
+    `${baseUrl}/${agent_id}/files/folder/`,
+    {
+      path: normalizedPath,
+      name,
+    },
+    { skipGlobalErrorNotify: true },
+  );
+  return data;
 }
 
 export async function renameAgentFile(agent_id, path, newName, platform) {
   const normalizedPath = normalizeAgentListPath(path, platform);
   const trimmedName = String(newName ?? "").trim();
-  try {
-    const { data } = await axios.post(
-      `${baseUrl}/${agent_id}/files/rename/`,
-      {
-        path: normalizedPath,
-        new_name: trimmedName,
-      },
-      { skipGlobalErrorNotify: true },
-    );
-    return data;
-  } catch (e) {
-    console.error(e);
-    throw e;
-  }
+  const { data } = await axios.post(
+    `${baseUrl}/${agent_id}/files/rename/`,
+    {
+      path: normalizedPath,
+      new_name: trimmedName,
+    },
+    { skipGlobalErrorNotify: true },
+  );
+  return data;
 }
 
 export async function deleteAgentFiles(agent_id, paths, platform) {
   const normalizedPaths = (paths ?? []).map((entry) =>
     normalizeAgentListPath(entry, platform),
   );
-  try {
-    const { data } = await axios.delete(`${baseUrl}/${agent_id}/files/`, {
-      data: { paths: normalizedPaths },
-      skipGlobalErrorNotify: true,
-    });
-    return data;
-  } catch (e) {
-    console.error(e);
-    throw e;
-  }
+  const { data } = await axios.delete(`${baseUrl}/${agent_id}/files/`, {
+    data: { paths: normalizedPaths },
+    skipGlobalErrorNotify: true,
+  });
+  return data;
 }

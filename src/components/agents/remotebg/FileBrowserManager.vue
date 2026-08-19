@@ -212,6 +212,7 @@ import {
 import {
   FILE_TRANSFER_DEFAULT_CHUNK_SIZE,
   TRANSFER_RECONNECTING_MESSAGE,
+  TRANSFER_SLOT_WAIT_MESSAGE,
 } from "@/constants/fileTransfer";
 import type {
   DownloadQueueItem,
@@ -263,7 +264,6 @@ import {
   type TransferTabSync,
   type TransferTabSyncEvent,
 } from "@/services/fileTransfer/transferTabSync";
-import { TRANSFER_SLOT_WAIT_MESSAGE } from "@/services/fileTransfer/sessionLimit";
 import type {
   DownloadTransferStatus,
   TransferAbortIntent,

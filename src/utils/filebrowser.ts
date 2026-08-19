@@ -96,6 +96,21 @@ export function isLikelyWindowsPath(path: string): boolean {
   return /^[A-Za-z]:[\\/]/.test(trimmed) || trimmed.startsWith("\\\\");
 }
 
+export function normalizeFileBrowserPathSlashes(
+  path: string,
+  platform?: string,
+): string {
+  const trimmed = (path || "").trim();
+  if (!trimmed) return trimmed;
+
+  const plat = (platform || "").toLowerCase();
+  const useWindows = plat === "windows" || isLikelyWindowsPath(trimmed);
+  if (useWindows) {
+    return trimmed.replace(/\//g, "\\");
+  }
+  return trimmed.replace(/\\/g, "/");
+}
+
 export function normalizeAgentListPath(
   path: string,
   platform?: string,
@@ -107,14 +122,14 @@ export function normalizeAgentListPath(
   const useWindows = plat === "windows" || isLikelyWindowsPath(trimmed);
 
   if (useWindows) {
-    const normalized = trimmed.replace(/\//g, "\\");
+    const normalized = normalizeFileBrowserPathSlashes(trimmed, "windows");
     const driveRoot = /^([A-Za-z]):\\*$/.exec(normalized);
     if (driveRoot) return `${driveRoot[1]}:\\`;
     if (normalized.startsWith("\\\\")) return normalized.replace(/\\+$/, "");
     return normalized;
   }
 
-  let normalized = trimmed.replace(/\\/g, "/");
+  let normalized = normalizeFileBrowserPathSlashes(trimmed, "linux");
   if (normalized !== "/") normalized = normalized.replace(/\/+$/, "");
   return normalized || "/";
 }
@@ -613,9 +628,13 @@ export function collectDroppedUploadFiles(
   return { files: fileListToArray(dataTransfer?.files), folderCount: 0 };
 }
 
-export function fileBrowserPathLeaf(path: string): string {
+export function fileBrowserPathLeaf(
+  path: string,
+  options?: { emptyFallback?: string },
+): string {
+  const emptyFallback = options?.emptyFallback ?? "this folder";
   const trimmed = path.trim().replace(/[\\/]+$/, "");
-  if (!trimmed) return "this folder";
+  if (!trimmed) return emptyFallback;
 
   const driveOnly = /^[A-Za-z]:$/.exec(trimmed);
   if (driveOnly) return `${driveOnly[0]}\\`;

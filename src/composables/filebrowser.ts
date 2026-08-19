@@ -4,8 +4,9 @@ import { uid } from "quasar";
 import type { QTreeFileNode } from "../types/filebrowser";
 import type { BreadcrumbSegment } from "../types/filebrowser";
 import {
-  isLikelyWindowsPath,
+  fileBrowserPathLeaf,
   normalizeAgentListPath,
+  normalizeFileBrowserPathSlashes,
 } from "../utils/filebrowser";
 
 function isWindowsPlatform(platform: string): boolean {
@@ -55,9 +56,11 @@ export function useFileBrowser(platform: MaybeRef<string> = "windows") {
   }
 
   function getFile(path: string, separator?: "/" | "\\"): string {
-    const sep = separator ?? pathSeparator.value;
-    const file = path.split(sep).pop();
-    return file ? file : "";
+    if (separator != null) {
+      const file = path.split(separator).pop();
+      return file ? file : "";
+    }
+    return fileBrowserPathLeaf(path, { emptyFallback: "" });
   }
 
   function getPath(path: string, separator?: "/" | "\\"): string {
@@ -68,12 +71,7 @@ export function useFileBrowser(platform: MaybeRef<string> = "windows") {
   }
 
   function normalizePathSlashes(p: string): string {
-    const trimmed = p.trim();
-    const useWindows = isWindows.value || isLikelyWindowsPath(trimmed);
-    if (useWindows) {
-      return trimmed.replace(/\//g, "\\");
-    }
-    return trimmed.replace(/\\/g, "/");
+    return normalizeFileBrowserPathSlashes(p, resolvedPlatform.value);
   }
 
   function pathKeyForCompare(p: string): string {

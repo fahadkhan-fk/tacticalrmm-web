@@ -21,6 +21,7 @@ import type {
   FileTransferProgress,
   TransferAbortIntent,
 } from "@/types/fileTransfer";
+import { fileBrowserPathLeaf } from "@/utils/filebrowser";
 
 import { createSha256Hasher, hashBlobPrefix, hashBytes } from "./hash";
 import {
@@ -68,10 +69,6 @@ interface DownloadSink {
   ): Promise<void>;
   finalize(): Promise<void>;
   abort(): Promise<void>;
-}
-
-function fileNameFromPath(sourcePath: string): string {
-  return sourcePath.replace(/\\/g, "/").split("/").pop() || "download";
 }
 
 async function releaseDownloadSession(
@@ -356,7 +353,8 @@ export async function runFileDownloadTransfer(
     onWaitingForSlot,
     onRetrying,
   } = options;
-  const fileName = fileNameFromPath(sourcePath);
+  const leaf = fileBrowserPathLeaf(sourcePath, { emptyFallback: "download" });
+  const fileName = /^[A-Za-z]:\\$/.test(leaf) ? "download" : leaf;
 
   onStatus?.("initializing");
   const {
