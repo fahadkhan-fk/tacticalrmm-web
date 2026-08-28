@@ -87,6 +87,7 @@
           />
           <iframe
             v-else
+            allow="clipboard-read; clipboard-write"
             :src="file"
             :style="{
               height: `${$q.screen.height - 30}px`,
