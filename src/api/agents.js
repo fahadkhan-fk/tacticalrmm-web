@@ -383,6 +383,13 @@ export async function fetchAgentTerminalDefaults(agent_id) {
   }
 }
 
+export async function fetchAgentFileBrowserDefaults(agent_id) {
+  const { data } = await axios.get(
+    `${baseUrl}/${agent_id}/file-browser-defaults/`,
+  );
+  return data;
+}
+
 export const FILE_BROWSER_DEFAULT_PAGE_SIZE = 500;
 
 export async function fetchAgentFiles(

@@ -79,10 +79,21 @@
         />
       </q-tab-panel>
       <q-tab-panel name="filebrowser" class="q-pa-none">
-        <FileBrowserManager
-          :agent_id="agent_id"
-          :agent-platform="String($route.query.agentPlatform || 'windows')"
-        />
+        <template v-if="fileBrowserDefaultsLoaded">
+          <FileBrowserManager
+            v-if="fileBrowserMode === 'new'"
+            :agent_id="agent_id"
+            :agent-platform="String($route.query.agentPlatform || 'windows')"
+          />
+          <iframe
+            v-else
+            :src="file"
+            :style="{
+              height: `${$q.screen.height - 30}px`,
+              width: `${$q.screen.width}px`,
+            }"
+          ></iframe>
+        </template>
       </q-tab-panel>
       <q-tab-panel
         v-if="$route.query.agentPlatform === 'windows'"
@@ -97,12 +108,13 @@
 
 <script>
 // composition imports
-import { ref, computed, onMounted, defineAsyncComponent } from "vue";
+import { ref, computed, watch, onMounted, defineAsyncComponent } from "vue";
 import { useRoute } from "vue-router";
 import { useQuasar, useMeta } from "quasar";
 import {
   fetchAgentMeshCentralURLs,
   fetchAgentTerminalDefaults,
+  fetchAgentFileBrowserDefaults,
 } from "@/api/agents";
 import { fetchDashboardInfo } from "@/api/core";
 
@@ -137,15 +149,20 @@ export default {
 
     // meshcentral tabs
     const terminal = ref("");
+    const file = ref("");
     const tab = ref("terminal");
     const terminalMode = ref("legacy");
     const terminalDefaults = ref(null);
+    const fileBrowserMode = ref("legacy");
+    const fileBrowserDefaultsLoaded = ref(false);
+    let fileBrowserDefaultsPromise = null;
 
     const agent_id = computed(() => params.agent_id);
 
     async function getMeshURLs() {
       const data = await fetchAgentMeshCentralURLs(params.agent_id);
       terminal.value = data.terminal;
+      file.value = data.file;
       useMeta({
         title: `${data.hostname} - ${data.client} - ${data.site} | Remote Background`,
       });
@@ -190,6 +207,54 @@ export default {
       }
     }
 
+    async function getFileBrowserDefaults() {
+      try {
+        const data = await fetchAgentFileBrowserDefaults(params.agent_id);
+
+        // TODO remove this after a few releases as all agents should be updated by then
+        const wantsNewFileBrowser = data?.file_browser_mode === "new";
+        const supportsNewFileBrowser = data?.supports_new_file_browser === true;
+
+        if (wantsNewFileBrowser && !supportsNewFileBrowser) {
+          fileBrowserMode.value = "legacy";
+
+          $q.notify({
+            type: "warning",
+            message:
+              "New file browser mode requires agent version 2.12.0 or higher. Reverting to legacy file browser mode. Please update the agent to use the new file browser.",
+            timeout: 6000,
+          });
+          return;
+        }
+
+        fileBrowserMode.value = wantsNewFileBrowser ? "new" : "legacy";
+      } catch (e) {
+        fileBrowserMode.value = "legacy";
+
+        $q.notify({
+          type: "negative",
+          message:
+            e?.response?.data?.detail || "Failed to load file browser settings",
+        });
+      } finally {
+        fileBrowserDefaultsLoaded.value = true;
+      }
+    }
+
+    function ensureFileBrowserDefaults() {
+      if (fileBrowserDefaultsLoaded.value || fileBrowserDefaultsPromise) {
+        return fileBrowserDefaultsPromise;
+      }
+      fileBrowserDefaultsPromise = getFileBrowserDefaults();
+      return fileBrowserDefaultsPromise;
+    }
+
+    watch(tab, (name) => {
+      if (name === "filebrowser") {
+        ensureFileBrowserDefaults();
+      }
+    });
+
     // vue lifecycle hooks
     onMounted(() => {
       getDashInfo();
@@ -200,11 +265,14 @@ export default {
     return {
       // reactive data
       terminal,
+      file,
       tab,
       agent_id,
       registryIcon,
       terminalMode,
       terminalDefaults,
+      fileBrowserMode,
+      fileBrowserDefaultsLoaded,
     };
   },
 };
