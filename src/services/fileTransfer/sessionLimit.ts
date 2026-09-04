@@ -104,6 +104,12 @@ function isAbortLikeError(err: unknown): boolean {
 export function isRetryableTransferError(err: unknown): boolean {
   if (isAbortLikeError(err)) return false;
   if (err instanceof RetryableTransferError) return true;
+
+  const detail = getAxiosErrorDetail(err);
+  if (detail && /timed out waiting for agent to push chunk/i.test(detail)) {
+    return true;
+  }
+
   if (err instanceof AxiosError) {
     if (
       err.code === "ERR_NETWORK" ||

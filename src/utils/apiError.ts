@@ -12,6 +12,42 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   );
 }
 
+function decodeArrayBufferAsText(data: ArrayBuffer): string | undefined {
+  try {
+    const text = new TextDecoder("utf-8").decode(data).trim();
+    return text || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function tryParseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
+function detailFromDecodedBody(
+  text: string,
+  keys: readonly string[],
+): string | undefined {
+  if (!text) return undefined;
+
+  const parsed = tryParseJson(text);
+  if (typeof parsed === "string" && parsed.trim()) {
+    return parsed.trim();
+  }
+  if (isPlainObject(parsed)) {
+    for (const key of keys) {
+      const found = firstStringFromUnknown(parsed[key]);
+      if (found) return found;
+    }
+  }
+  return text;
+}
+
 function firstStringFromUnknown(value: unknown): string | undefined {
   if (typeof value === "string" && value.trim()) {
     return value.trim();
@@ -44,6 +80,27 @@ export function getAxiosErrorDetail(
 
     if (typeof data === "string" && data.trim()) {
       return data.trim();
+    }
+
+    if (typeof ArrayBuffer !== "undefined" && data instanceof ArrayBuffer) {
+      const text = decodeArrayBufferAsText(data);
+      if (text) {
+        const fromBody = detailFromDecodedBody(text, keys);
+        if (fromBody) return fromBody;
+      }
+    }
+
+    if (typeof Uint8Array !== "undefined" && data instanceof Uint8Array) {
+      const text = decodeArrayBufferAsText(
+        data.buffer.slice(
+          data.byteOffset,
+          data.byteOffset + data.byteLength,
+        ) as ArrayBuffer,
+      );
+      if (text) {
+        const fromBody = detailFromDecodedBody(text, keys);
+        if (fromBody) return fromBody;
+      }
     }
 
     if (isPlainObject(data)) {
