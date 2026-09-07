@@ -37,7 +37,7 @@
       </q-tab>
     </q-tabs>
     <q-separator />
-    <q-tab-panels v-model="tab">
+    <q-tab-panels v-show="tab !== 'filebrowser'" v-model="tab">
       <q-tab-panel name="terminal" class="q-pa-none">
         <TerminalManager
           v-if="terminalMode === 'new'"
@@ -78,24 +78,6 @@
           :agentPlatform="$route.query.agentPlatform"
         />
       </q-tab-panel>
-      <q-tab-panel name="filebrowser" class="q-pa-none">
-        <template v-if="fileBrowserDefaultsLoaded">
-          <FileBrowserManager
-            v-if="fileBrowserMode === 'new'"
-            :agent_id="agent_id"
-            :agent-platform="String($route.query.agentPlatform || 'windows')"
-          />
-          <iframe
-            v-else
-            allow="clipboard-read; clipboard-write"
-            :src="file"
-            :style="{
-              height: `${$q.screen.height - 30}px`,
-              width: `${$q.screen.width}px`,
-            }"
-          ></iframe>
-        </template>
-      </q-tab-panel>
       <q-tab-panel
         v-if="$route.query.agentPlatform === 'windows'"
         name="registry"
@@ -104,6 +86,30 @@
         <RegistryManager :agent_id="agent_id" />
       </q-tab-panel>
     </q-tab-panels>
+    <keep-alive>
+      <FileBrowserManager
+        v-if="
+          tab === 'filebrowser' &&
+          fileBrowserDefaultsLoaded &&
+          fileBrowserMode === 'new'
+        "
+        :agent_id="agent_id"
+        :agent-platform="String($route.query.agentPlatform || 'windows')"
+      />
+    </keep-alive>
+    <iframe
+      v-if="
+        tab === 'filebrowser' &&
+        fileBrowserDefaultsLoaded &&
+        fileBrowserMode === 'legacy'
+      "
+      allow="clipboard-read; clipboard-write"
+      :src="file"
+      :style="{
+        height: `${$q.screen.height - 30}px`,
+        width: `${$q.screen.width}px`,
+      }"
+    ></iframe>
   </div>
 </template>
 

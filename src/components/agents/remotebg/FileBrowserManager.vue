@@ -168,7 +168,16 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, toRef, watch } from "vue";
+import {
+  computed,
+  onActivated,
+  onBeforeUnmount,
+  onDeactivated,
+  onMounted,
+  ref,
+  toRef,
+  watch,
+} from "vue";
 import { useQuasar } from "quasar";
 import { useTimeoutFn } from "@vueuse/core";
 
@@ -736,6 +745,54 @@ async function loadMoreRows() {
   }
 }
 
+function startOwnershipRefreshTimer(): void {
+  if (ownershipRefreshTimer) return;
+  ownershipRefreshTimer = setInterval(() => {
+    applyRemoteOwnershipFlags();
+  }, 5_000);
+}
+
+function stopOwnershipRefreshTimer(): void {
+  if (!ownershipRefreshTimer) return;
+  clearInterval(ownershipRefreshTimer);
+  ownershipRefreshTimer = null;
+}
+
+function persistQueuesAsPaused(): void {
+  for (const item of downloadQueue.value) {
+    if (isDownloadQueueItemTerminal(item.status)) continue;
+    void persistDownloadQueueMeta(props.agent_id, item);
+  }
+  for (const item of uploadQueue.value) {
+    if (isUploadQueueItemTerminal(item.status)) continue;
+    void persistUploadQueueMeta(props.agent_id, item);
+  }
+}
+
+function pauseInFlightTransfersForUnload(): void {
+  pauseAllDownloads();
+  pauseAllUploads();
+  persistQueuesAsPaused();
+}
+
+function onPageHidePause(): void {
+  pauseInFlightTransfersForUnload();
+}
+
+let findShortcutAttached = false;
+
+function attachFindShortcut(): void {
+  if (findShortcutAttached) return;
+  window.addEventListener("keydown", onGlobalFindShortcut);
+  findShortcutAttached = true;
+}
+
+function detachFindShortcut(): void {
+  if (!findShortcutAttached) return;
+  window.removeEventListener("keydown", onGlobalFindShortcut);
+  findShortcutAttached = false;
+}
+
 onMounted(() => {
   tabSyncHandler = onTransferTabSyncEvent;
   tabSync?.close();
@@ -747,19 +804,27 @@ onMounted(() => {
   const seq = ++restoreSeq;
   void restoreResumableTransfers(seq);
   getTabSync().query();
-  ownershipRefreshTimer = setInterval(() => {
-    applyRemoteOwnershipFlags();
-  }, 5_000);
-  window.addEventListener("keydown", onGlobalFindShortcut);
+  startOwnershipRefreshTimer();
+  attachFindShortcut();
+  window.addEventListener("pagehide", onPageHidePause);
+});
+
+onActivated(() => {
+  startOwnershipRefreshTimer();
+  attachFindShortcut();
+});
+
+onDeactivated(() => {
+  detachFindShortcut();
+  stopOwnershipRefreshTimer();
 });
 
 onBeforeUnmount(() => {
+  pauseInFlightTransfersForUnload();
   cancelFilterDebounce();
-  window.removeEventListener("keydown", onGlobalFindShortcut);
-  if (ownershipRefreshTimer) {
-    clearInterval(ownershipRefreshTimer);
-    ownershipRefreshTimer = null;
-  }
+  detachFindShortcut();
+  window.removeEventListener("pagehide", onPageHidePause);
+  stopOwnershipRefreshTimer();
   tabSyncHandler = null;
   tabSync?.close();
   tabSync = null;
@@ -768,6 +833,7 @@ onBeforeUnmount(() => {
 watch(
   () => [props.agent_id, props.agentPlatform] as const,
   () => {
+    pauseInFlightTransfersForUnload();
     const seq = ++restoreSeq;
     clearFolderFilter();
     initializeRootPath();
@@ -2036,6 +2102,16 @@ function pauseAllDownloads() {
   for (const item of downloadQueue.value) {
     if (isDownloadQueueItemActive(item.status)) {
       abortDownloadItem(item.id, "pause");
+    } else if (item.status === "queued") {
+      item.status = "paused";
+    }
+  }
+}
+
+function pauseAllUploads() {
+  for (const item of uploadQueue.value) {
+    if (isUploadQueueItemActive(item.status)) {
+      abortUploadItem(item.id, "pause");
     } else if (item.status === "queued") {
       item.status = "paused";
     }
