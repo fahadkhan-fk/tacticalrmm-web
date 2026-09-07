@@ -50,11 +50,12 @@ export async function initAgentFileUpload(
 export async function resumeAgentFileUpload(
   agentId: string,
   payload: ResumeFileUploadPayload,
+  signal?: AbortSignal,
 ): Promise<FileTransferInitUploadResponse> {
   const { data } = await axios.post<FileTransferInitUploadResponse>(
     `${baseUrl}/${agentId}/files/upload/init/`,
     payload,
-    { timeout: 60_000, ...transferRequestConfig },
+    { timeout: 60_000, signal, ...transferRequestConfig },
   );
   return data;
 }

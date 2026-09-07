@@ -64,24 +64,27 @@ export async function runFileUploadTransfer(
   } = options;
   const totalSize = file.size;
   const saved = loadUploadResume(agentId, file, destinationPath);
+  const resumeSessionId = knownSessionId || saved?.sessionId || null;
 
   let initData = null as Awaited<ReturnType<typeof initAgentFileUpload>> | null;
   let staleSessionId: string | null = null;
 
-  if (saved?.sessionId) {
+  if (resumeSessionId) {
     try {
-      initData = await resumeAgentFileUpload(agentId, {
-        session_id: saved.sessionId,
-        filename: file.name,
-        total_size: totalSize,
-      });
+      initData = await resumeAgentFileUpload(
+        agentId,
+        {
+          session_id: resumeSessionId,
+          filename: file.name,
+          total_size: totalSize,
+        },
+        signal,
+      );
     } catch {
-      staleSessionId = saved.sessionId;
+      staleSessionId = resumeSessionId;
       clearUploadResume(agentId, file, destinationPath);
       initData = null;
     }
-  } else if (knownSessionId) {
-    staleSessionId = knownSessionId;
   }
 
   if (!initData) {
@@ -104,8 +107,9 @@ export async function runFileUploadTransfer(
         ),
       { signal, onWaitingForSlot },
     );
-    saveUploadResume(agentId, file, destinationPath, initData.session_id);
   }
+
+  saveUploadResume(agentId, file, destinationPath, initData.session_id);
 
   const sessionId = initData.session_id;
   onSession?.(sessionId);
