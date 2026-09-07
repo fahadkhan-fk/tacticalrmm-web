@@ -250,13 +250,20 @@ import {
 import {
   archiveDownloadHandleIdbKey,
   archiveDownloadResumeKey,
+  canPickDownloadSaveFile,
+  canPickExistingDownloadFile,
   clearDownloadResume,
   clearDownloadResumeBySessionId,
   clearUploadResume,
   clearUploadResumeBySessionId,
   downloadHandleIdbKey,
+  downloadSessionHandleIdbKey,
+  isAbortError,
   loadDownloadResume,
   loadUploadResume,
+  persistDownloadFileHandle,
+  pickDownloadSaveHandle,
+  pickExistingDownloadHandle,
 } from "@/services/fileTransfer/resume";
 import {
   clearTransferPersistence,
@@ -265,6 +272,7 @@ import {
   persistDownloadQueueMeta,
   persistUploadQueueMeta,
   reconcileResumableTransfers,
+  requestStoredDownloadHandle,
 } from "@/services/fileTransfer/transferQueuePersist";
 import {
   createTransferTabSync,
@@ -1486,6 +1494,10 @@ function offerZipDownloadDialog(selection: {
 }
 
 function startZipDownload(items: FileBrowserItem[]) {
+  void enqueueZipDownload(items);
+}
+
+async function enqueueZipDownload(items: FileBrowserItem[]) {
   if (!items.length) {
     notifyWarning("Select one or more items to download.");
     return;
@@ -1506,6 +1518,25 @@ function startZipDownload(items: FileBrowserItem[]) {
   pruneFinishedDownloadsBeforeNewBatch();
 
   const archiveName = deriveArchiveDownloadName(items);
+  let saveHandle: FileSystemFileHandle | undefined;
+  if (canPickDownloadSaveFile()) {
+    try {
+      saveHandle = await pickDownloadSaveHandle(archiveName);
+    } catch (err) {
+      if (isAbortError(err)) return;
+      notifyError("Could not choose a save location.");
+      return;
+    }
+  }
+
+  const handleKey = archiveDownloadHandleIdbKey(
+    props.agent_id,
+    items.map((item) => item.path),
+  );
+  if (saveHandle) {
+    await persistDownloadFileHandle([handleKey], saveHandle).catch(() => {});
+  }
+
   downloadQueueSummary.value = null;
   downloadStopAllRequested = false;
   downloadBatchIsSingle.value = true;
@@ -1519,6 +1550,8 @@ function startZipDownload(items: FileBrowserItem[]) {
     archivePaths: items.map((item) => item.path),
     status: "queued",
     progress: 0,
+    handleKey,
+    resumeFileHandle: saveHandle,
   });
 
   void processDownloadQueue();
@@ -1632,7 +1665,7 @@ function notifyUploadBatchSummary(
   notifyWarning(`Uploads finished: ${parts.join(", ")}.`);
 }
 
-function enqueueDownloads(files: FileBrowserItem[], singleFile = false) {
+async function enqueueDownloads(files: FileBrowserItem[], singleFile = false) {
   if (!files.length) return;
 
   if (isDownloadProcessorBusy()) {
@@ -1658,11 +1691,32 @@ function enqueueDownloads(files: FileBrowserItem[], singleFile = false) {
     batch = batch.slice(0, room);
   }
 
+  const saveHandles: Array<FileSystemFileHandle | undefined> = [];
+  if (canPickDownloadSaveFile()) {
+    try {
+      for (const file of batch) {
+        const suggested =
+          file.name && file.name !== "/" ? file.name : "download";
+        saveHandles.push(await pickDownloadSaveHandle(suggested));
+      }
+    } catch (err) {
+      if (isAbortError(err)) return;
+      notifyError("Could not choose a save location.");
+      return;
+    }
+  }
+
   downloadQueueSummary.value = null;
   downloadStopAllRequested = false;
   downloadBatchIsSingle.value = singleFile;
 
-  for (const file of batch) {
+  for (let i = 0; i < batch.length; i++) {
+    const file = batch[i];
+    const saveHandle = saveHandles[i];
+    const handleKey = downloadHandleIdbKey(props.agent_id, file.path);
+    if (saveHandle) {
+      await persistDownloadFileHandle([handleKey], saveHandle).catch(() => {});
+    }
     const id = `dl-${Date.now()}-${downloadIdSeq++}`;
     downloadQueue.value.push({
       id,
@@ -1670,6 +1724,8 @@ function enqueueDownloads(files: FileBrowserItem[], singleFile = false) {
       sourcePath: file.path,
       status: "queued",
       progress: 0,
+      handleKey,
+      resumeFileHandle: saveHandle,
     });
   }
 
@@ -1710,6 +1766,7 @@ async function runSingleDownload(itemId: string): Promise<void> {
       abortIntent,
       chunkSize: FILE_TRANSFER_DEFAULT_CHUNK_SIZE,
       knownSessionId: item.sessionId,
+      fileHandle: item.resumeFileHandle,
       onWaitingForSlot: () => {
         const current = findDownloadItem(itemId);
         if (!current) return;
@@ -2035,7 +2092,7 @@ async function discardPausedDownload(item: DownloadQueueItem): Promise<void> {
   notifyInfo("Download cancelled.");
 }
 
-function resumeDownloadItem(id: string) {
+async function resumeDownloadItem(id: string) {
   const item = findDownloadItem(id);
   if (!item || item.status !== "paused") return;
   if (
@@ -2051,6 +2108,37 @@ function resumeDownloadItem(id: string) {
       "This download cannot be resumed here. Cancel it to free the server session.",
     );
     return;
+  }
+  let handle = await requestStoredDownloadHandle(props.agent_id, item);
+  if (
+    !handle &&
+    item.recoveryHint === "needs_destination" &&
+    canPickExistingDownloadFile()
+  ) {
+    try {
+      handle = await pickExistingDownloadHandle();
+      const persistKeys = [
+        item.handleKey,
+        item.sessionId
+          ? downloadSessionHandleIdbKey(item.sessionId)
+          : undefined,
+        downloadHandleIdbKey(props.agent_id, item.sourcePath),
+      ];
+      await persistDownloadFileHandle(persistKeys, handle).catch(() => {});
+    } catch (err) {
+      if (!isAbortError(err)) {
+        notifyWarning(
+          err instanceof Error
+            ? err.message
+            : "Could not reopen the saved download file.",
+        );
+        return;
+      }
+    }
+  }
+  if (handle) {
+    item.resumeFileHandle = handle;
+    item.recoveryHint = "ready";
   }
   item.hidden = false;
   item.status = "queued";
@@ -2140,11 +2228,11 @@ async function startDownloads(items: FileBrowserItem[]) {
   }
 
   if (selection.mode === "single") {
-    enqueueDownloads(selection.files, true);
+    await enqueueDownloads(selection.files, true);
     return;
   }
 
-  enqueueDownloads(selection.files, false);
+  await enqueueDownloads(selection.files, false);
 }
 
 function downloadSelectedItems() {

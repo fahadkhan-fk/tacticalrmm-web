@@ -14,13 +14,18 @@ import { bytes2Human } from "@/utils/format";
 import {
   archiveDownloadHandleIdbKey,
   archiveDownloadResumeKey,
+  canPickExistingDownloadFile,
   downloadHandleIdbKey,
-  ensureFileHandlePermission,
+  downloadSessionHandleIdbKey,
+  downloadBytesPathKey,
+  downloadBytesSessionKey,
   findDownloadResumeScopeKeyBySessionId,
   idbDeleteFileHandle,
+  idbGetDownloadBytes,
   idbGetFileHandle,
-  loadDownloadResume,
   openFileTransferIdb,
+  queryFileHandlePermission,
+  requestFileHandlePermission,
 } from "./resume";
 
 export interface TransferUiMeta {
@@ -299,46 +304,140 @@ async function classifyDownloadRecovery(
   transfer: ResumableFileTransfer,
   meta: TransferUiMeta | undefined,
 ): Promise<TransferRecoveryHint> {
-  if (transfer.is_archive && transfer.status === "waiting_for_agent") {
-    return "archive_preparing";
-  }
+  try {
+    if (transfer.is_archive && transfer.status === "waiting_for_agent") {
+      return "archive_preparing";
+    }
 
-  const scopeFromMeta = meta?.resumeScopeKey;
-  const scopeFromLs = findDownloadResumeScopeKeyBySessionId(
-    agentId,
-    transfer.session_id,
-  );
-  const resumeScopeKey =
-    scopeFromMeta ||
-    scopeFromLs ||
-    (transfer.is_archive ? null : transfer.destination_path);
+    const scopeFromMeta = meta?.resumeScopeKey;
+    const scopeFromLs = findDownloadResumeScopeKeyBySessionId(
+      agentId,
+      transfer.session_id,
+    );
+    const resumeScopeKey =
+      scopeFromMeta ||
+      scopeFromLs ||
+      (transfer.is_archive ? null : transfer.destination_path);
 
-  if (!resumeScopeKey) {
+    if (!resumeScopeKey) {
+      return "needs_destination";
+    }
+
+    const handleKeys = [
+      meta?.handleKey,
+      downloadSessionHandleIdbKey(transfer.session_id),
+      meta?.archivePaths?.length
+        ? archiveDownloadHandleIdbKey(agentId, meta.archivePaths)
+        : null,
+      !transfer.is_archive
+        ? downloadHandleIdbKey(agentId, resumeScopeKey)
+        : null,
+    ];
+    let handle: FileSystemFileHandle | undefined;
+    for (const key of handleKeys) {
+      if (!key) continue;
+      handle = await idbGetFileHandle(key);
+      if (handle) break;
+    }
+
+    const bytes =
+      (await idbGetDownloadBytes(
+        downloadBytesSessionKey(transfer.session_id),
+      )) ||
+      (resumeScopeKey
+        ? await idbGetDownloadBytes(
+            downloadBytesPathKey(agentId, resumeScopeKey),
+          )
+        : undefined);
+    if (bytes && bytes.committedOffset > 0) {
+      return "ready";
+    }
+
+    if (!handle) {
+      if (canPickExistingDownloadFile()) {
+        return "needs_destination";
+      }
+      return "ready";
+    }
+    const state = await queryFileHandlePermission(handle);
+    if (state === "granted") return "ready";
+    return "needs_permission";
+  } catch {
     return "needs_destination";
   }
+}
 
-  let handleKey = meta?.handleKey;
-  if (!handleKey && meta?.archivePaths?.length) {
-    handleKey = archiveDownloadHandleIdbKey(agentId, meta.archivePaths);
+function downloadHandleKeyForQueueItem(
+  agentId: string,
+  item: {
+    sourcePath: string;
+    kind?: "file" | "archive";
+    archivePaths?: string[];
+  },
+): string | null {
+  if (item.kind === "archive" && item.archivePaths?.length) {
+    return archiveDownloadHandleIdbKey(agentId, item.archivePaths);
   }
-  if (!handleKey && !transfer.is_archive) {
-    handleKey = downloadHandleIdbKey(agentId, resumeScopeKey);
+  if (item.sourcePath) {
+    return downloadHandleIdbKey(agentId, item.sourcePath);
   }
+  return null;
+}
 
-  if (!handleKey) {
-    return "needs_destination";
+export async function requestStoredDownloadHandle(
+  agentId: string,
+  item: {
+    sourcePath: string;
+    kind?: "file" | "archive";
+    archivePaths?: string[];
+    handleKey?: string;
+    sessionId?: string;
+  },
+): Promise<FileSystemFileHandle | null> {
+  const keys = [
+    item.handleKey,
+    item.sessionId ? downloadSessionHandleIdbKey(item.sessionId) : null,
+    downloadHandleKeyForQueueItem(agentId, item),
+  ];
+  const seen = new Set<string>();
+  for (const key of keys) {
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    const handle = await idbGetFileHandle(key);
+    if (!handle) continue;
+    if (await requestFileHandlePermission(handle)) return handle;
   }
+  return null;
+}
 
-  const handle = await idbGetFileHandle(handleKey);
-  if (!handle) {
-    const saved = loadDownloadResume(agentId, resumeScopeKey);
-    if (!saved) return "non_resumable";
-    return "needs_destination";
+export async function requestStoredDownloadHandlePermission(
+  agentId: string,
+  item: {
+    sourcePath: string;
+    kind?: "file" | "archive";
+    archivePaths?: string[];
+    handleKey?: string;
+  },
+): Promise<boolean> {
+  return (await requestStoredDownloadHandle(agentId, item)) !== null;
+}
+
+function downloadRecoveryErrorMessage(
+  recoveryHint: TransferRecoveryHint,
+): string | undefined {
+  if (recoveryHint === "non_resumable") {
+    return "This download cannot be resumed here. Cancel to free the session.";
   }
-  if (!(await ensureFileHandlePermission(handle))) {
-    return "needs_destination";
+  if (recoveryHint === "needs_destination") {
+    return "Select the existing download file to resume.";
   }
-  return "ready";
+  if (recoveryHint === "needs_permission") {
+    return "Click Resume and allow file access to continue.";
+  }
+  if (recoveryHint === "archive_preparing") {
+    return "Archive was still preparing. Resume to continue.";
+  }
+  return undefined;
 }
 
 export interface ReconcileResult {
@@ -371,62 +470,91 @@ export async function reconcileResumableTransfers(
         : 0;
     const queueId = meta?.localQueueId || `restored-${transfer.session_id}`;
 
-    if (transfer.operation === "upload") {
-      const identity = meta?.uploadIdentity;
-      uploads.push({
+    try {
+      if (transfer.operation === "upload") {
+        const identity = meta?.uploadIdentity;
+        uploads.push({
+          id: queueId,
+          name: transfer.filename,
+          sizeLabel: bytes2Human(transfer.total_size),
+          sizeBytes: transfer.total_size,
+          destinationPath: transfer.destination_path,
+          status: "paused",
+          progress,
+          conflictPolicy: transfer.conflict_policy ?? "replace",
+          committedOffset: transfer.committed_offset,
+          sessionId: transfer.session_id,
+          hidden: !!meta?.hidden,
+          expiresAt: transfer.expires_at,
+          recoveryHint: "needs_file",
+          uploadFileIdentity: identity,
+        });
+        continue;
+      }
+
+      const recoveryHint = await classifyDownloadRecovery(
+        agentId,
+        transfer,
+        meta,
+      );
+      const isArchive = !!transfer.is_archive;
+      const sourcePath =
+        meta?.destinationPath ||
+        findDownloadResumeScopeKeyBySessionId(agentId, transfer.session_id) ||
+        transfer.destination_path;
+
+      downloads.push({
         id: queueId,
         name: transfer.filename,
-        sizeLabel: bytes2Human(transfer.total_size),
-        sizeBytes: transfer.total_size,
-        destinationPath: transfer.destination_path,
+        sourcePath,
+        kind: isArchive ? "archive" : "file",
+        archivePaths: meta?.archivePaths,
         status: "paused",
         progress,
-        conflictPolicy: transfer.conflict_policy ?? "replace",
-        committedOffset: transfer.committed_offset,
         sessionId: transfer.session_id,
+        handleKey: meta?.handleKey,
         hidden: !!meta?.hidden,
         expiresAt: transfer.expires_at,
-        recoveryHint: "needs_file",
-        uploadFileIdentity: identity,
+        recoveryHint,
+        committedOffset: transfer.committed_offset,
+        totalSize: transfer.total_size,
+        chunkSize: transfer.chunk_size,
+        errorMessage: downloadRecoveryErrorMessage(recoveryHint),
       });
-      continue;
+    } catch {
+      if (transfer.operation === "upload") {
+        uploads.push({
+          id: queueId,
+          name: transfer.filename,
+          sizeLabel: bytes2Human(transfer.total_size),
+          sizeBytes: transfer.total_size,
+          destinationPath: transfer.destination_path,
+          status: "paused",
+          progress,
+          sessionId: transfer.session_id,
+          hidden: !!meta?.hidden,
+          expiresAt: transfer.expires_at,
+          recoveryHint: "needs_file",
+        });
+      } else {
+        downloads.push({
+          id: queueId,
+          name: transfer.filename,
+          sourcePath: transfer.destination_path,
+          kind: transfer.is_archive ? "archive" : "file",
+          status: "paused",
+          progress,
+          sessionId: transfer.session_id,
+          hidden: !!meta?.hidden,
+          expiresAt: transfer.expires_at,
+          recoveryHint: "needs_destination",
+          committedOffset: transfer.committed_offset,
+          totalSize: transfer.total_size,
+          chunkSize: transfer.chunk_size,
+          errorMessage: downloadRecoveryErrorMessage("needs_destination"),
+        });
+      }
     }
-
-    const recoveryHint = await classifyDownloadRecovery(
-      agentId,
-      transfer,
-      meta,
-    );
-    const isArchive = !!transfer.is_archive;
-    const sourcePath =
-      meta?.destinationPath ||
-      findDownloadResumeScopeKeyBySessionId(agentId, transfer.session_id) ||
-      transfer.destination_path;
-
-    downloads.push({
-      id: queueId,
-      name: transfer.filename,
-      sourcePath,
-      kind: isArchive ? "archive" : "file",
-      archivePaths: meta?.archivePaths,
-      status: "paused",
-      progress,
-      sessionId: transfer.session_id,
-      hidden: !!meta?.hidden,
-      expiresAt: transfer.expires_at,
-      recoveryHint,
-      committedOffset: transfer.committed_offset,
-      totalSize: transfer.total_size,
-      chunkSize: transfer.chunk_size,
-      errorMessage:
-        recoveryHint === "non_resumable"
-          ? "This download cannot be resumed in this browser. Cancel to free the session."
-          : recoveryHint === "needs_destination"
-            ? "Choose a save location to resume."
-            : recoveryHint === "archive_preparing"
-              ? "Archive was still preparing. Resume to continue."
-              : undefined,
-    });
   }
 
   for (const entry of listLocalPausedEntries(agentId)) {

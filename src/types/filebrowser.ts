@@ -130,6 +130,7 @@ export type TransferRecoveryHint =
   | "ready"
   | "needs_file"
   | "needs_destination"
+  | "needs_permission"
   | "archive_preparing"
   | "non_resumable";
 
@@ -166,6 +167,8 @@ export interface DownloadQueueItem {
   totalSize?: number;
   chunkSize?: number;
   ownedByOtherTab?: boolean;
+  handleKey?: string;
+  resumeFileHandle?: FileSystemFileHandle;
 }
 
 export type DownloadSelectionMode = "none" | "single" | "sequential" | "zip";

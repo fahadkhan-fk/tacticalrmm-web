@@ -154,11 +154,12 @@ export async function initAgentFileDownload(
 export async function resumeAgentFileDownload(
   agentId: string,
   payload: ResumeFileDownloadPayload,
+  signal?: AbortSignal,
 ): Promise<FileTransferInitDownloadResponse> {
   const { data } = await axios.post<FileTransferInitDownloadResponse>(
     `${baseUrl}/${agentId}/files/download/init/`,
     payload,
-    { timeout: 60_000, ...transferRequestConfig },
+    { timeout: 60_000, signal, ...transferRequestConfig },
   );
   return data;
 }

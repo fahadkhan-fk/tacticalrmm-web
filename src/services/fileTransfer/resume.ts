@@ -1,6 +1,7 @@
 import axios from "axios";
 
 import {
+  FILE_TRANSFER_DOWNLOAD_BYTES_STORE,
   FILE_TRANSFER_DOWNLOAD_IDB_NAME,
   FILE_TRANSFER_DOWNLOAD_IDB_STORE,
   FILE_TRANSFER_DOWNLOAD_RESUME_LS_KEY,
@@ -65,6 +66,59 @@ export function archiveDownloadHandleIdbKey(
   paths: string[],
 ): string {
   return `dl:${archiveDownloadResumeKey(agentId, paths)}`;
+}
+
+export function downloadSessionHandleIdbKey(sessionId: string): string {
+  return `dl:session:${sessionId}`;
+}
+
+export function downloadBytesPathKey(
+  agentId: string,
+  resumeScopeKey: string,
+): string {
+  return `bytes:${agentId}:${resumeScopeKey}`;
+}
+
+export function downloadBytesSessionKey(sessionId: string): string {
+  return `bytes:session:${sessionId}`;
+}
+
+export function canPickDownloadSaveFile(): boolean {
+  return "showSaveFilePicker" in window;
+}
+
+export function canPickExistingDownloadFile(): boolean {
+  return "showOpenFilePicker" in window;
+}
+
+export async function pickDownloadSaveHandle(
+  suggestedName: string,
+): Promise<FileSystemFileHandle> {
+  return window.showSaveFilePicker({
+    suggestedName,
+    startIn: "downloads",
+  });
+}
+
+export async function pickExistingDownloadHandle(): Promise<FileSystemFileHandle> {
+  const [handle] = await window.showOpenFilePicker({
+    multiple: false,
+    startIn: "downloads",
+  });
+  if (!(await requestFileHandlePermission(handle))) {
+    throw new Error("Write access to that file was denied.");
+  }
+  return handle;
+}
+
+export async function persistDownloadFileHandle(
+  keys: Array<string | null | undefined>,
+  handle: FileSystemFileHandle,
+): Promise<void> {
+  const unique = [...new Set(keys.filter((key): key is string => !!key))];
+  for (const key of unique) {
+    await idbPutFileHandle(key, handle);
+  }
 }
 
 export function loadUploadResume(
@@ -195,6 +249,9 @@ function openTransferIdb(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(FILE_TRANSFER_UI_META_IDB_STORE)) {
         db.createObjectStore(FILE_TRANSFER_UI_META_IDB_STORE);
       }
+      if (!db.objectStoreNames.contains(FILE_TRANSFER_DOWNLOAD_BYTES_STORE)) {
+        db.createObjectStore(FILE_TRANSFER_DOWNLOAD_BYTES_STORE);
+      }
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
@@ -241,13 +298,75 @@ export async function idbDeleteFileHandle(key: string): Promise<void> {
   });
 }
 
+export interface DownloadBytesRecord {
+  buffers: ArrayBuffer[];
+  committedOffset: number;
+  chunkSize: number;
+}
+
+export async function idbPutDownloadBytes(
+  key: string,
+  record: DownloadBytesRecord,
+): Promise<void> {
+  const db = await openTransferIdb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(FILE_TRANSFER_DOWNLOAD_BYTES_STORE, "readwrite");
+    tx.objectStore(FILE_TRANSFER_DOWNLOAD_BYTES_STORE).put(record, key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+export async function idbGetDownloadBytes(
+  key: string,
+): Promise<DownloadBytesRecord | undefined> {
+  const db = await openTransferIdb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(FILE_TRANSFER_DOWNLOAD_BYTES_STORE, "readonly");
+    const request = tx.objectStore(FILE_TRANSFER_DOWNLOAD_BYTES_STORE).get(key);
+    request.onsuccess = () =>
+      resolve(request.result as DownloadBytesRecord | undefined);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+export async function idbDeleteDownloadBytes(key: string): Promise<void> {
+  const db = await openTransferIdb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(FILE_TRANSFER_DOWNLOAD_BYTES_STORE, "readwrite");
+    tx.objectStore(FILE_TRANSFER_DOWNLOAD_BYTES_STORE).delete(key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+export async function queryFileHandlePermission(
+  handle: FileSystemFileHandle,
+): Promise<PermissionState> {
+  try {
+    return await handle.queryPermission({ mode: "readwrite" });
+  } catch {
+    return "prompt";
+  }
+}
+
+export async function requestFileHandlePermission(
+  handle: FileSystemFileHandle,
+): Promise<boolean> {
+  try {
+    if ((await queryFileHandlePermission(handle)) === "granted") return true;
+    return (
+      (await handle.requestPermission({ mode: "readwrite" })) === "granted"
+    );
+  } catch {
+    return false;
+  }
+}
+
 export async function ensureFileHandlePermission(
   handle: FileSystemFileHandle,
 ): Promise<boolean> {
-  const opts: FileSystemHandlePermissionDescriptor = { mode: "readwrite" };
-  if ((await handle.queryPermission(opts)) === "granted") return true;
-  if ((await handle.requestPermission(opts)) === "granted") return true;
-  return false;
+  return requestFileHandlePermission(handle);
 }
 
 export function alignResumeOffset(
