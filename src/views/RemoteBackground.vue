@@ -88,11 +88,8 @@
     </q-tab-panels>
     <keep-alive>
       <FileBrowserManager
-        v-if="
-          tab === 'filebrowser' &&
-          fileBrowserDefaultsLoaded &&
-          fileBrowserMode === 'new'
-        "
+        v-if="fileBrowserDefaultsLoaded && fileBrowserMode === 'new'"
+        v-show="tab === 'filebrowser'"
         :agent_id="agent_id"
         :agent-platform="String($route.query.agentPlatform || 'windows')"
       />
