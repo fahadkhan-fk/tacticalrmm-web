@@ -49,6 +49,7 @@ import {
   RetryableTransferError,
   type TransferSlotWaitInfo,
   type TransientRetryInfo,
+  isRetryableTransferError,
   sleepAbortable,
   withTransferSessionRetry,
   withTransientRetry,
@@ -639,10 +640,9 @@ export async function runFileDownloadTransfer(
     });
 
     onStatus?.("completing");
-    const completeData = await completeAgentFileDownload(
-      agentId,
-      sessionIdValue,
-      signal,
+    const completeData = await withTransientRetry(
+      () => completeAgentFileDownload(agentId, sessionIdValue, signal),
+      { signal, onRetry: onRetrying },
     );
 
     const localSha256 = hasher.hex();
@@ -679,7 +679,7 @@ export async function runFileDownloadTransfer(
           sessionId,
         );
       }
-    } else {
+    } else if (!isRetryableTransferError(err)) {
       await releaseDownloadSession(agentId, sessionId, "error");
       await discardDownloadResumeState(
         agentId,
@@ -888,10 +888,9 @@ export async function runArchiveDownloadTransfer(
     });
 
     onStatus?.("completing");
-    const completeData = await completeAgentFileDownload(
-      agentId,
-      sessionIdValue,
-      signal,
+    const completeData = await withTransientRetry(
+      () => completeAgentFileDownload(agentId, sessionIdValue, signal),
+      { signal, onRetry: onRetrying },
     );
 
     const localSha256 = hasher.hex();
@@ -929,7 +928,7 @@ export async function runArchiveDownloadTransfer(
           sessionId,
         );
       }
-    } else {
+    } else if (!isRetryableTransferError(err)) {
       await releaseDownloadSession(agentId, sessionId, "error");
       await discardDownloadResumeState(
         agentId,

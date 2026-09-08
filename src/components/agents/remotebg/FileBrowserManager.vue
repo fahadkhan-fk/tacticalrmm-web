@@ -220,6 +220,7 @@ import {
 } from "@/constants/filebrowser";
 import {
   FILE_TRANSFER_DEFAULT_CHUNK_SIZE,
+  TRANSFER_CONNECTION_LOST_MESSAGE,
   TRANSFER_RECONNECTING_MESSAGE,
   TRANSFER_SLOT_WAIT_MESSAGE,
 } from "@/constants/fileTransfer";
@@ -274,6 +275,7 @@ import {
   reconcileResumableTransfers,
   requestStoredDownloadHandle,
 } from "@/services/fileTransfer/transferQueuePersist";
+import { isRetryableTransferError } from "@/services/fileTransfer/sessionLimit";
 import {
   createTransferTabSync,
   transferClaimKey,
@@ -1935,6 +1937,18 @@ async function runSingleDownload(itemId: string): Promise<void> {
       return;
     }
 
+    if (isRetryableTransferError(err)) {
+      current.status = "paused";
+      current.hidden = false;
+      current.ownedByOtherTab = false;
+      current.errorMessage = TRANSFER_CONNECTION_LOST_MESSAGE;
+      void persistDownloadQueueMeta(props.agent_id, current);
+      if (downloadBatchIsSingle.value && downloadQueue.value.length === 1) {
+        notifyWarning(TRANSFER_CONNECTION_LOST_MESSAGE);
+      }
+      return;
+    }
+
     current.status = "failed";
     current.hidden = false;
     current.ownedByOtherTab = false;
@@ -2613,9 +2627,18 @@ async function runSingleUpload(itemId: string): Promise<void> {
         onProgress: (p) => {
           updateUploadProgress(itemId, p);
           const current = findUploadItem(itemId);
-          if (current && current.errorMessage === TRANSFER_SLOT_WAIT_MESSAGE) {
+          if (
+            current &&
+            (current.errorMessage === TRANSFER_SLOT_WAIT_MESSAGE ||
+              current.errorMessage === TRANSFER_RECONNECTING_MESSAGE)
+          ) {
             current.errorMessage = undefined;
           }
+        },
+        onRetrying: () => {
+          const current = findUploadItem(itemId);
+          if (!current) return;
+          current.errorMessage = TRANSFER_RECONNECTING_MESSAGE;
         },
       },
     );
@@ -2677,6 +2700,18 @@ async function runSingleUpload(itemId: string): Promise<void> {
       }
       if (!multiBatch) {
         notifyInfo(mode === "cancel" ? "Upload cancelled." : "Upload paused.");
+      }
+      return;
+    }
+
+    if (isRetryableTransferError(err)) {
+      current.status = "paused";
+      current.hidden = false;
+      current.ownedByOtherTab = false;
+      current.errorMessage = TRANSFER_CONNECTION_LOST_MESSAGE;
+      void persistUploadQueueMeta(props.agent_id, current);
+      if (!multiBatch) {
+        notifyWarning(`"${item.name}": ${TRANSFER_CONNECTION_LOST_MESSAGE}`);
       }
       return;
     }

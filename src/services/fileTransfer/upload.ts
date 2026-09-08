@@ -21,7 +21,10 @@ import {
 } from "./resume";
 import {
   type TransferSlotWaitInfo,
+  type TransientRetryInfo,
+  isRetryableTransferError,
   withTransferSessionRetry,
+  withTransientRetry,
 } from "./sessionLimit";
 
 export interface RunFileUploadOptions {
@@ -33,6 +36,7 @@ export interface RunFileUploadOptions {
   onSession?: (sessionId: string) => void;
   knownSessionId?: string;
   onWaitingForSlot?: (info: TransferSlotWaitInfo) => void;
+  onRetrying?: (info: TransientRetryInfo) => void;
 }
 
 async function releaseUploadSession(
@@ -61,6 +65,7 @@ export async function runFileUploadTransfer(
     onSession,
     knownSessionId,
     onWaitingForSlot,
+    onRetrying,
   } = options;
   const totalSize = file.size;
   const saved = loadUploadResume(agentId, file, destinationPath);
@@ -136,12 +141,16 @@ export async function runFileUploadTransfer(
       const end = offset + blob.size - 1;
       hashBytes(hasher, await blob.arrayBuffer());
 
-      const chunkRes = await uploadAgentFileChunk(
-        agentId,
-        sessionId,
-        blob,
-        `bytes ${offset}-${end}/${totalSize}`,
-        signal,
+      const chunkRes = await withTransientRetry(
+        () =>
+          uploadAgentFileChunk(
+            agentId,
+            sessionId,
+            blob,
+            `bytes ${offset}-${end}/${totalSize}`,
+            signal,
+          ),
+        { signal, onRetry: onRetrying },
       );
 
       offset = chunkRes.accepted_offset;
@@ -153,11 +162,9 @@ export async function runFileUploadTransfer(
     }
 
     const fileSha256 = hasher.hex();
-    const completeData = await completeAgentFileUpload(
-      agentId,
-      sessionId,
-      fileSha256,
-      signal,
+    const completeData = await withTransientRetry(
+      () => completeAgentFileUpload(agentId, sessionId, fileSha256, signal),
+      { signal, onRetry: onRetrying },
     );
 
     const agentSha = (completeData.sha256 || "").toLowerCase();
@@ -176,7 +183,7 @@ export async function runFileUploadTransfer(
         await releaseUploadSession(agentId, sessionId, "user");
         clearUploadResume(agentId, file, destinationPath);
       }
-    } else {
+    } else if (!isRetryableTransferError(err)) {
       await releaseUploadSession(agentId, sessionId, "error");
       clearUploadResume(agentId, file, destinationPath);
     }

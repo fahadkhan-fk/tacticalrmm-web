@@ -18,8 +18,15 @@ export const FILE_TRANSFER_SLOT_RETRY_BASE_MS = 2_000;
 export const FILE_TRANSFER_SLOT_RETRY_MAX_MS = 30_000;
 export const TRANSFER_SLOT_WAIT_MESSAGE =
   "Waiting for a free transfer slot. Cancel or finish a paused transfer to continue.";
+export const FILE_TRANSFER_TRANSIENT_RETRY_ATTEMPTS = 4;
+export const FILE_TRANSFER_TRANSIENT_RETRY_BASE_MS = 500;
+export const FILE_TRANSFER_TRANSIENT_RETRY_MAX_MS = 4_000;
+export const FILE_TRANSFER_TRANSIENT_RETRY_MAX_DURATION_MS = 20_000;
+export const FILE_TRANSFER_TRANSIENT_RETRY_HARD_CAP = 40;
 export const TRANSFER_RECONNECTING_MESSAGE =
   "Connection interrupted — reconnecting…";
+export const TRANSFER_CONNECTION_LOST_MESSAGE =
+  "Connection lost. Click Resume to continue.";
 export const TRANSFER_TOOLTIP_CLEAR_FINISHED =
   "Remove completed, failed, and cancelled items from this list.";
 export const TRANSFER_TOOLTIP_HIDE_PAUSED =

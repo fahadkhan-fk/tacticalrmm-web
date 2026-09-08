@@ -3,6 +3,11 @@ import { AxiosError } from "axios";
 import {
   FILE_TRANSFER_SLOT_RETRY_BASE_MS,
   FILE_TRANSFER_SLOT_RETRY_MAX_MS,
+  FILE_TRANSFER_TRANSIENT_RETRY_ATTEMPTS,
+  FILE_TRANSFER_TRANSIENT_RETRY_BASE_MS,
+  FILE_TRANSFER_TRANSIENT_RETRY_HARD_CAP,
+  FILE_TRANSFER_TRANSIENT_RETRY_MAX_DURATION_MS,
+  FILE_TRANSFER_TRANSIENT_RETRY_MAX_MS,
 } from "@/constants/fileTransfer";
 import { getAxiosErrorDetail } from "@/utils/apiError";
 
@@ -101,12 +106,20 @@ function isAbortLikeError(err: unknown): boolean {
   return false;
 }
 
+const TRANSIENT_NETWORK_MESSAGE =
+  /network error|failed to fetch|err_internet_disconnected|err_network_changed|load failed/i;
+
 export function isRetryableTransferError(err: unknown): boolean {
   if (isAbortLikeError(err)) return false;
   if (err instanceof RetryableTransferError) return true;
 
   const detail = getAxiosErrorDetail(err);
-  if (detail && /timed out waiting for agent to push chunk/i.test(detail)) {
+  if (detail && /timed out waiting for agent to /i.test(detail)) {
+    return true;
+  }
+
+  const message = err instanceof Error ? err.message : String(err ?? "");
+  if (TRANSIENT_NETWORK_MESSAGE.test(message)) {
     return true;
   }
 
@@ -139,6 +152,7 @@ export interface WithTransientRetryOptions {
   maxAttempts?: number;
   baseDelayMs?: number;
   maxDelayMs?: number;
+  maxDurationMs?: number;
   isRetryable?: (err: unknown) => boolean;
   onRetry?: (info: TransientRetryInfo) => void;
 }
@@ -149,13 +163,15 @@ export async function withTransientRetry<T>(
 ): Promise<T> {
   const {
     signal,
-    maxAttempts = 4,
-    baseDelayMs = 500,
-    maxDelayMs = 8_000,
+    maxAttempts = FILE_TRANSFER_TRANSIENT_RETRY_ATTEMPTS,
+    baseDelayMs = FILE_TRANSFER_TRANSIENT_RETRY_BASE_MS,
+    maxDelayMs = FILE_TRANSFER_TRANSIENT_RETRY_MAX_MS,
+    maxDurationMs = FILE_TRANSFER_TRANSIENT_RETRY_MAX_DURATION_MS,
     isRetryable = isRetryableTransferError,
     onRetry,
   } = options;
   let attempt = 0;
+  let firstFailureAt: number | null = null;
 
   for (;;) {
     if (signal?.aborted) {
@@ -165,7 +181,17 @@ export async function withTransientRetry<T>(
       return await operation();
     } catch (err) {
       attempt += 1;
-      if (attempt >= maxAttempts || !isRetryable(err)) {
+      if (!isRetryable(err)) {
+        throw err;
+      }
+      if (firstFailureAt === null) {
+        firstFailureAt = Date.now();
+      }
+      const retryWindowExpired = Date.now() - firstFailureAt >= maxDurationMs;
+      if (
+        attempt >= FILE_TRANSFER_TRANSIENT_RETRY_HARD_CAP ||
+        (attempt >= maxAttempts && retryWindowExpired)
+      ) {
         throw err;
       }
       if (signal?.aborted) {
