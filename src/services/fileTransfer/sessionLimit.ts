@@ -1,6 +1,7 @@
 import { AxiosError } from "axios";
 
 import {
+  FILE_TRANSFER_ACK_POLL_MS,
   FILE_TRANSFER_SLOT_RETRY_BASE_MS,
   FILE_TRANSFER_SLOT_RETRY_MAX_MS,
   FILE_TRANSFER_TRANSIENT_RETRY_ATTEMPTS,
@@ -141,6 +142,14 @@ export function isRetryableTransferError(err: unknown): boolean {
   return false;
 }
 
+export function isTransferAckWaitError(err: unknown): boolean {
+  if (!(err instanceof AxiosError) || err.response?.status !== 408) {
+    return false;
+  }
+  const detail = getAxiosErrorDetail(err);
+  return /timed out waiting for agent to /i.test(detail || "");
+}
+
 export interface TransientRetryInfo {
   attempt: number;
   delayMs: number;
@@ -180,7 +189,6 @@ export async function withTransientRetry<T>(
     try {
       return await operation();
     } catch (err) {
-      attempt += 1;
       if (!isRetryable(err)) {
         throw err;
       }
@@ -188,6 +196,17 @@ export async function withTransientRetry<T>(
         firstFailureAt = Date.now();
       }
       const retryWindowExpired = Date.now() - firstFailureAt >= maxDurationMs;
+      if (isTransferAckWaitError(err)) {
+        if (retryWindowExpired) {
+          throw err;
+        }
+        if (signal?.aborted) {
+          throw abortError();
+        }
+        await sleepAbortable(FILE_TRANSFER_ACK_POLL_MS, signal);
+        continue;
+      }
+      attempt += 1;
       if (
         attempt >= FILE_TRANSFER_TRANSIENT_RETRY_HARD_CAP ||
         (attempt >= maxAttempts && retryWindowExpired)
