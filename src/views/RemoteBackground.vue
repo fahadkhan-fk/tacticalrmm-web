@@ -107,6 +107,34 @@
         width: `${$q.screen.width}px`,
       }"
     ></iframe>
+    <div
+      v-else-if="tab === 'filebrowser' && !fileBrowserDefaultsLoaded"
+      class="file-browser-status"
+    >
+      <q-spinner color="primary" size="28px" />
+    </div>
+    <div
+      v-else-if="
+        tab === 'filebrowser' &&
+        (fileBrowserMode === 'denied' || fileBrowserMode === 'error')
+      "
+      class="file-browser-status"
+    >
+      <q-icon
+        :name="fileBrowserMode === 'denied' ? 'lock' : 'error_outline'"
+        size="32px"
+        :color="fileBrowserMode === 'denied' ? 'grey' : 'negative'"
+      />
+      <div class="file-browser-status__label">{{ fileBrowserError }}</div>
+      <q-btn
+        v-if="fileBrowserMode === 'error'"
+        unelevated
+        no-caps
+        color="primary"
+        label="Retry"
+        @click="retryFileBrowserDefaults"
+      />
+    </div>
   </div>
 </template>
 
@@ -157,7 +185,8 @@ export default {
     const tab = ref("terminal");
     const terminalMode = ref("legacy");
     const terminalDefaults = ref(null);
-    const fileBrowserMode = ref("legacy");
+    const fileBrowserMode = ref(null);
+    const fileBrowserError = ref("");
     const fileBrowserDefaultsLoaded = ref(false);
     let fileBrowserDefaultsPromise = null;
 
@@ -212,6 +241,7 @@ export default {
     }
 
     async function getFileBrowserDefaults() {
+      fileBrowserError.value = "";
       try {
         const data = await fetchAgentFileBrowserDefaults(params.agent_id);
 
@@ -233,12 +263,23 @@ export default {
 
         fileBrowserMode.value = wantsNewFileBrowser ? "new" : "legacy";
       } catch (e) {
-        fileBrowserMode.value = "legacy";
+        const status = e?.response?.status;
+        if (status === 403) {
+          fileBrowserMode.value = "denied";
+          fileBrowserError.value =
+            "You do not have permission to use the file browser.";
+        } else {
+          const detail = e?.response?.data?.detail;
+          fileBrowserMode.value = "error";
+          fileBrowserError.value =
+            typeof detail === "string" && detail.trim()
+              ? detail
+              : "Failed to load file browser settings";
+        }
 
         $q.notify({
           type: "negative",
-          message:
-            e?.response?.data?.detail || "Failed to load file browser settings",
+          message: fileBrowserError.value,
         });
       } finally {
         fileBrowserDefaultsLoaded.value = true;
@@ -253,8 +294,20 @@ export default {
       return fileBrowserDefaultsPromise;
     }
 
+    function retryFileBrowserDefaults() {
+      fileBrowserDefaultsLoaded.value = false;
+      fileBrowserDefaultsPromise = null;
+      fileBrowserMode.value = null;
+      fileBrowserError.value = "";
+      ensureFileBrowserDefaults();
+    }
+
     watch(tab, (name) => {
       if (name === "filebrowser") {
+        if (fileBrowserMode.value === "error") {
+          retryFileBrowserDefaults();
+          return;
+        }
         ensureFileBrowserDefaults();
       }
     });
@@ -276,8 +329,34 @@ export default {
       terminalMode,
       terminalDefaults,
       fileBrowserMode,
+      fileBrowserError,
       fileBrowserDefaultsLoaded,
+      retryFileBrowserDefaults,
     };
   },
 };
 </script>
+
+<style scoped>
+.file-browser-status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: calc(100vh - 80px);
+  padding: 24px;
+  text-align: center;
+}
+
+.file-browser-status__label {
+  max-width: 420px;
+  font-size: 0.95rem;
+  line-height: 1.4;
+  color: rgba(0, 0, 0, 0.7);
+}
+
+.body--dark .file-browser-status__label {
+  color: rgba(255, 255, 255, 0.7);
+}
+</style>
