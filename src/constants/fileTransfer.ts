@@ -16,8 +16,14 @@ export const FILE_TRANSFER_TAB_SYNC_HEARTBEAT_MS = 5_000;
 export const FILE_TRANSFER_TAB_SYNC_STALE_MS = 15_000;
 export const FILE_TRANSFER_SLOT_RETRY_BASE_MS = 2_000;
 export const FILE_TRANSFER_SLOT_RETRY_MAX_MS = 30_000;
+export const FILE_TRANSFER_SLOT_RETRY_MAX_ATTEMPTS = 20;
+export const FILE_TRANSFER_SLOT_RETRY_MAX_DURATION_MS = 10 * 60 * 1000;
 export const TRANSFER_SLOT_WAIT_MESSAGE =
   "Waiting for a free transfer slot. Cancel or finish a paused transfer to continue.";
+export const TRANSFER_SLOT_WAIT_TIMEOUT_MESSAGE =
+  "No transfer slot became available. Cancel or finish a paused transfer, then try again.";
+export const TRANSFER_RATE_LIMIT_MESSAGE =
+  "Too many requests. Try again later.";
 export const FILE_TRANSFER_TRANSIENT_RETRY_ATTEMPTS = 4;
 export const FILE_TRANSFER_TRANSIENT_RETRY_BASE_MS = 500;
 export const FILE_TRANSFER_TRANSIENT_RETRY_MAX_MS = 4_000;

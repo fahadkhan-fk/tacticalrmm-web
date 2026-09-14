@@ -3,14 +3,19 @@ import { AxiosError } from "axios";
 import {
   FILE_TRANSFER_ACK_POLL_MS,
   FILE_TRANSFER_SLOT_RETRY_BASE_MS,
+  FILE_TRANSFER_SLOT_RETRY_MAX_ATTEMPTS,
+  FILE_TRANSFER_SLOT_RETRY_MAX_DURATION_MS,
   FILE_TRANSFER_SLOT_RETRY_MAX_MS,
   FILE_TRANSFER_TRANSIENT_RETRY_ATTEMPTS,
   FILE_TRANSFER_TRANSIENT_RETRY_BASE_MS,
   FILE_TRANSFER_TRANSIENT_RETRY_HARD_CAP,
   FILE_TRANSFER_TRANSIENT_RETRY_MAX_DURATION_MS,
   FILE_TRANSFER_TRANSIENT_RETRY_MAX_MS,
+  TRANSFER_SLOT_WAIT_TIMEOUT_MESSAGE,
 } from "@/constants/fileTransfer";
 import { getAxiosErrorDetail } from "@/utils/apiError";
+
+const TRANSFER_SESSION_LIMIT_MESSAGE = /too many concurrent file transfers/i;
 
 export interface TransferSlotWaitInfo {
   attempt: number;
@@ -20,6 +25,16 @@ export interface TransferSlotWaitInfo {
 export interface WithTransferSessionRetryOptions {
   signal?: AbortSignal;
   onWaitingForSlot?: (info: TransferSlotWaitInfo) => void;
+  maxAttempts?: number;
+  maxDurationMs?: number;
+  delayMsForAttempt?: (attempt: number) => number;
+}
+
+export class TransferSlotWaitTimeoutError extends Error {
+  constructor(message = TRANSFER_SLOT_WAIT_TIMEOUT_MESSAGE) {
+    super(message);
+    this.name = "TransferSlotWaitTimeoutError";
+  }
 }
 
 export function isTransferSessionLimitError(err: unknown): boolean {
@@ -27,10 +42,7 @@ export function isTransferSessionLimitError(err: unknown): boolean {
   if (err.response?.status !== 429) return false;
 
   const detail = getAxiosErrorDetail(err);
-  if (detail && /too many concurrent/i.test(detail)) {
-    return true;
-  }
-  return true;
+  return Boolean(detail && TRANSFER_SESSION_LIMIT_MESSAGE.test(detail));
 }
 
 export function transferSlotRetryDelayMs(attempt: number): number {
@@ -68,8 +80,15 @@ export async function withTransferSessionRetry<T>(
   operation: () => Promise<T>,
   options: WithTransferSessionRetryOptions = {},
 ): Promise<T> {
-  const { signal, onWaitingForSlot } = options;
+  const {
+    signal,
+    onWaitingForSlot,
+    maxAttempts = FILE_TRANSFER_SLOT_RETRY_MAX_ATTEMPTS,
+    maxDurationMs = FILE_TRANSFER_SLOT_RETRY_MAX_DURATION_MS,
+    delayMsForAttempt = transferSlotRetryDelayMs,
+  } = options;
   let attempt = 0;
+  let firstFailureAt: number | null = null;
 
   for (;;) {
     if (signal?.aborted) {
@@ -85,7 +104,14 @@ export async function withTransferSessionRetry<T>(
         throw abortError();
       }
       attempt += 1;
-      const delayMs = transferSlotRetryDelayMs(attempt);
+      if (firstFailureAt === null) {
+        firstFailureAt = Date.now();
+      }
+      const timedOut = Date.now() - firstFailureAt >= maxDurationMs;
+      if (attempt >= maxAttempts || timedOut) {
+        throw new TransferSlotWaitTimeoutError();
+      }
+      const delayMs = delayMsForAttempt(attempt);
       onWaitingForSlot?.({ attempt, delayMs });
       await sleepAbortable(delayMs, signal);
     }

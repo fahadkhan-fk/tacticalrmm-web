@@ -11,11 +11,16 @@ import {
   MAX_SEQUENTIAL_DOWNLOAD_FILES,
 } from "@/constants/filebrowser";
 import {
+  TRANSFER_RATE_LIMIT_MESSAGE,
   TRANSFER_RECONNECTING_LABEL,
   TRANSFER_RECONNECTING_MESSAGE,
   TRANSFER_SLOT_WAIT_LABEL,
   TRANSFER_SLOT_WAIT_MESSAGE,
 } from "@/constants/fileTransfer";
+import {
+  isTransferSessionLimitError,
+  TransferSlotWaitTimeoutError,
+} from "@/services/fileTransfer/sessionLimit";
 import { bytes2Human, formatDate } from "@/utils/format";
 import { getAxiosErrorDetail } from "@/utils/apiError";
 import { AxiosError } from "axios";
@@ -309,8 +314,18 @@ export function getFileBrowserErrorMessage(
   err: unknown,
   fallback = "Unable to complete the operation.",
 ): string {
-  if (err instanceof AxiosError && err.response?.status === 429) {
+  if (err instanceof TransferSlotWaitTimeoutError) {
+    return err.message;
+  }
+  if (isTransferSessionLimitError(err)) {
     return "Too many concurrent file transfers. Cancel or finish a paused transfer, then try again.";
+  }
+  if (err instanceof AxiosError && err.response?.status === 429) {
+    const detail = getAxiosErrorDetail(err);
+    if (detail && detail.length < 200 && !detail.includes("<")) {
+      return formatFileBrowserApiErrorMessage(detail);
+    }
+    return TRANSFER_RATE_LIMIT_MESSAGE;
   }
   const message = getListFilesErrorMessage(err);
   if (message === "Unable to load directory contents.") {
