@@ -1,5 +1,6 @@
 import {
   ackAgentFileDownloadChunk,
+  assertDownloadChunkRange,
   cancelAgentFileDownload,
   completeAgentFileDownload,
   getAgentDownloadStatus,
@@ -24,6 +25,7 @@ import type {
 import { fileBrowserPathLeaf } from "@/utils/filebrowser";
 
 import { createSha256Hasher, hashBlobPrefix, hashBytes } from "./hash";
+import { writeDownloadChunkThenAck } from "./downloadChunkCommit";
 import {
   alignResumeOffset,
   archiveDownloadHandleIdbKey,
@@ -220,6 +222,10 @@ async function streamDownloadChunks(
           signal,
         );
         const range = parseContentRangeHeader(contentRange);
+        assertDownloadChunkRange(range, {
+          start: offset,
+          totalSize,
+        });
         const expectedLen = range.end - range.start + 1;
         if (data.byteLength !== expectedLen) {
           throw new RetryableTransferError(
@@ -231,13 +237,16 @@ async function streamDownloadChunks(
       { signal, onRetry: onRetrying },
     );
 
-    hashBytes(hasher, chunkBuf);
-
-    await withTransientRetry(
-      () => ackAgentFileDownloadChunk(agentId, sessionId, newCommitted),
-      { signal, onRetry: onRetrying },
-    );
-    await sink.writeChunk(chunkBuf);
+    await writeDownloadChunkThenAck({
+      chunk: chunkBuf,
+      writeChunk: (buf) => sink.writeChunk(buf),
+      afterWrite: () => hashBytes(hasher, chunkBuf),
+      ack: () =>
+        withTransientRetry(
+          () => ackAgentFileDownloadChunk(agentId, sessionId, newCommitted),
+          { signal, onRetry: onRetrying },
+        ),
+    });
     committedOffset = newCommitted;
 
     onProgress?.({

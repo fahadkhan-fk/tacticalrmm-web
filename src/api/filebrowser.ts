@@ -180,6 +180,27 @@ export function parseContentRangeHeader(header: string | undefined): {
   };
 }
 
+export function assertDownloadChunkRange(
+  range: { start: number; end: number; total: number },
+  expected: { start: number; totalSize: number },
+): void {
+  if (range.start !== expected.start) {
+    throw new Error(
+      `Download chunk offset mismatch: expected ${expected.start}, received ${range.start}.`,
+    );
+  }
+  if (range.total !== expected.totalSize) {
+    throw new Error(
+      `Download chunk total mismatch: expected ${expected.totalSize}, received ${range.total}.`,
+    );
+  }
+  if (range.end < range.start) {
+    throw new Error(
+      `Invalid Content-Range: end ${range.end} is before start ${range.start}.`,
+    );
+  }
+}
+
 export async function getAgentFileDownloadChunk(
   agentId: string,
   sessionId: string,
