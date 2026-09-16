@@ -285,3 +285,16 @@ export async function listAgentFileTransfers(
   );
   return data;
 }
+
+export async function checkAgentExistingNames(
+  agentId: string,
+  path: string,
+  names: string[],
+): Promise<{ existing: string[] }> {
+  const { data } = await axios.post<{ existing: string[] }>(
+    `${baseUrl}/${agentId}/files/exists/`,
+    { path, names },
+    { timeout: 30_000, ...transferRequestConfig },
+  );
+  return data;
+}

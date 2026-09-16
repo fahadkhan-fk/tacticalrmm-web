@@ -192,6 +192,7 @@ import {
 import {
   cancelAgentFileDownload,
   cancelAgentFileUpload,
+  checkAgentExistingNames,
   listAgentFileTransfers,
 } from "@/api/filebrowser";
 import FileBrowserDownloadProgress from "@/components/agents/remotebg/FileBrowserDownloadProgress.vue";
@@ -283,10 +284,6 @@ import {
   type TransferTabSync,
   type TransferTabSyncEvent,
 } from "@/services/fileTransfer/transferTabSync";
-import type {
-  DownloadTransferStatus,
-  TransferAbortIntent,
-} from "@/types/fileTransfer";
 import { bytes2Human } from "@/utils/format";
 import {
   dropRejectToastMessage,
@@ -304,6 +301,7 @@ import {
   isUploadQueueItemActive,
   isUploadQueueItemTerminal,
   listUploadNameConflicts,
+  filesMatchingExistingNames,
   mapApiItemToFileBrowserItem,
   mapApiItemsToFileBrowserItems,
   normalizeAgentListPath,
@@ -2485,11 +2483,34 @@ async function queueFilesForUpload(
     return;
   }
 
-  const conflicts = listUploadNameConflicts(
-    toEnqueue,
-    rows.value,
+  const destinationPath = normalizeAgentListPath(
+    currentPath.value.trim(),
     agentPlatform.value,
   );
+
+  let conflicts: File[] = [];
+  try {
+    const result = await checkAgentExistingNames(
+      props.agent_id,
+      destinationPath,
+      toEnqueue.map((file) => file.name),
+    );
+    conflicts = filesMatchingExistingNames(
+      toEnqueue,
+      result.existing || [],
+      agentPlatform.value,
+    );
+  } catch {
+    notifyWarning(
+      "Could not check the folder for existing files. Only names currently shown in the list were compared.",
+    );
+    conflicts = listUploadNameConflicts(
+      toEnqueue,
+      rows.value,
+      agentPlatform.value,
+    );
+  }
+
   let conflictPolicy: "skip" | "replace" = "replace";
   if (conflicts.length > 0) {
     const action = await confirmUploadOverwrite(conflicts);
@@ -2512,11 +2533,6 @@ async function queueFilesForUpload(
       conflictPolicy = "replace";
     }
   }
-
-  const destinationPath = normalizeAgentListPath(
-    currentPath.value.trim(),
-    agentPlatform.value,
-  );
 
   for (const file of toEnqueue) {
     const id = `up-${Date.now()}-${uploadIdSeq++}`;

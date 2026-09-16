@@ -697,9 +697,18 @@ export function listUploadNameConflicts(
   rows: FileBrowserItem[],
   platform: string,
 ): File[] {
-  const existingFiles = rows.filter((row) => row.type === "file");
   return files.filter((file) =>
-    existingFiles.some((row) => fileNamesMatch(row.name, file.name, platform)),
+    rows.some((row) => fileNamesMatch(row.name, file.name, platform)),
+  );
+}
+
+export function filesMatchingExistingNames(
+  files: File[],
+  existingNames: string[],
+  platform: string,
+): File[] {
+  return files.filter((file) =>
+    existingNames.some((name) => fileNamesMatch(file.name, name, platform)),
   );
 }
 
