@@ -27,7 +27,6 @@ import { fileBrowserPathLeaf } from "@/utils/filebrowser";
 import { createSha256Hasher, hashBlobPrefix, hashBytes } from "./hash";
 import { writeDownloadChunkThenAck } from "./downloadChunkCommit";
 import {
-  alignResumeOffset,
   archiveDownloadHandleIdbKey,
   archiveDownloadResumeKey,
   clearDownloadResume,
@@ -180,6 +179,23 @@ function assertMemoryDownloadAllowed(
   }
 }
 
+const SAVE_PICKER_UNAVAILABLE_MESSAGE =
+  "Could not open the save dialog. Click download again and choose where to save the file.";
+
+function rethrowSavePickerError(
+  err: unknown,
+  signal: AbortSignal | undefined,
+  abortIntent?: TransferAbortIntent,
+): never {
+  if (isAbortError(err)) {
+    if (abortIntent && !signal?.aborted) {
+      abortIntent.mode = "cancel";
+    }
+    throw err;
+  }
+  throw new Error(SAVE_PICKER_UNAVAILABLE_MESSAGE);
+}
+
 interface StreamDownloadChunksParams {
   agentId: string;
   sessionId: string;
@@ -267,6 +283,7 @@ async function createDownloadSink(
     beforeSavePicker?: () => Promise<void>;
     knownSessionId?: string;
     existingHandle?: FileSystemFileHandle;
+    abortIntent?: TransferAbortIntent;
   } = {},
 ): Promise<{
   sink: DownloadSink;
@@ -282,6 +299,7 @@ async function createDownloadSink(
     beforeSavePicker,
     knownSessionId,
     existingHandle,
+    abortIntent,
   } = options;
   const canFS = "showSaveFilePicker" in window;
   const saved = loadDownloadResume(agentId, resumeScopeKey);
@@ -362,11 +380,11 @@ async function createDownloadSink(
       );
       buffers = trimBuffersToOffset(stored?.buffers || [], resumeOffset);
     } else if (canFS) {
+      if (signal?.aborted) {
+        throw new DOMException("Download aborted", "AbortError");
+      }
+      await beforeSavePicker?.();
       try {
-        if (signal?.aborted) {
-          throw new DOMException("Download aborted", "AbortError");
-        }
-        await beforeSavePicker?.();
         fileHandle = await window.showSaveFilePicker({
           suggestedName: fileName,
           startIn: "downloads",
@@ -374,8 +392,7 @@ async function createDownloadSink(
         writable = await fileHandle.createWritable();
         await idbPutFileHandle(handleKey, fileHandle);
       } catch (err) {
-        if (isAbortError(err)) throw err;
-        buffers = [];
+        rethrowSavePickerError(err, signal, abortIntent);
       }
     } else {
       buffers = stored?.buffers || [];
@@ -547,6 +564,7 @@ export async function runFileDownloadTransfer(
     fileHandle: sinkHandle,
   } = await createDownloadSink(agentId, sourcePath, fileName, {
     signal,
+    abortIntent,
     knownSessionId,
     existingHandle: fileHandle,
   });
@@ -746,6 +764,7 @@ export async function runArchiveDownloadTransfer(
       fileHandle: sinkHandle,
     } = await createDownloadSink(agentId, resumeScopeKey, fileName, {
       signal,
+      abortIntent,
       handleKeyOverride: handleKey,
       knownSessionId,
       existingHandle: fileHandle,
@@ -776,7 +795,13 @@ export async function runArchiveDownloadTransfer(
     }));
   } catch (err) {
     if (sessionId) {
-      await releaseDownloadSession(agentId, sessionId, "error");
+      if (isAbortError(err)) {
+        if (abortIntent?.mode !== "pause") {
+          await releaseDownloadSession(agentId, sessionId, "user");
+        }
+      } else {
+        await releaseDownloadSession(agentId, sessionId, "error");
+      }
     }
     throw err;
   }
