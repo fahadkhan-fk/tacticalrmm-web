@@ -101,6 +101,13 @@ export function isLikelyWindowsPath(path: string): boolean {
   return /^[A-Za-z]:[\\/]/.test(trimmed) || trimmed.startsWith("\\\\");
 }
 
+function usesWindowsPathSeparators(path: string, platform?: string): boolean {
+  const plat = (platform || "").toLowerCase();
+  if (plat === "windows") return true;
+  if (plat === "linux" || plat === "darwin") return false;
+  return isLikelyWindowsPath(path);
+}
+
 export function normalizeFileBrowserPathSlashes(
   path: string,
   platform?: string,
@@ -108,12 +115,10 @@ export function normalizeFileBrowserPathSlashes(
   const trimmed = (path || "").trim();
   if (!trimmed) return trimmed;
 
-  const plat = (platform || "").toLowerCase();
-  const useWindows = plat === "windows" || isLikelyWindowsPath(trimmed);
-  if (useWindows) {
+  if (usesWindowsPathSeparators(trimmed, platform)) {
     return trimmed.replace(/\//g, "\\");
   }
-  return trimmed.replace(/\\/g, "/");
+  return trimmed;
 }
 
 export function normalizeAgentListPath(
@@ -123,10 +128,7 @@ export function normalizeAgentListPath(
   const trimmed = (path || "").trim();
   if (!trimmed) return trimmed;
 
-  const plat = (platform || "").toLowerCase();
-  const useWindows = plat === "windows" || isLikelyWindowsPath(trimmed);
-
-  if (useWindows) {
+  if (usesWindowsPathSeparators(trimmed, platform)) {
     const normalized = normalizeFileBrowserPathSlashes(trimmed, "windows");
     const driveRoot = /^([A-Za-z]):\\*$/.exec(normalized);
     if (driveRoot) return `${driveRoot[1]}:\\`;
@@ -134,7 +136,10 @@ export function normalizeAgentListPath(
     return normalized;
   }
 
-  let normalized = normalizeFileBrowserPathSlashes(trimmed, "linux");
+  let normalized = normalizeFileBrowserPathSlashes(
+    trimmed,
+    platform || "linux",
+  );
   if (normalized !== "/") normalized = normalized.replace(/\/+$/, "");
   return normalized || "/";
 }
@@ -645,17 +650,25 @@ export function collectDroppedUploadFiles(
 
 export function fileBrowserPathLeaf(
   path: string,
-  options?: { emptyFallback?: string },
+  options?: { emptyFallback?: string; platform?: string },
 ): string {
   const emptyFallback = options?.emptyFallback ?? "this folder";
-  const trimmed = path.trim().replace(/[\\/]+$/, "");
+  const trimmed = path.trim();
   if (!trimmed) return emptyFallback;
 
-  const driveOnly = /^[A-Za-z]:$/.exec(trimmed);
-  if (driveOnly) return `${driveOnly[0]}\\`;
+  if (usesWindowsPathSeparators(trimmed, options?.platform)) {
+    const stripped = trimmed.replace(/[\\/]+$/, "");
+    if (!stripped) return emptyFallback;
+    const driveOnly = /^[A-Za-z]:$/.exec(stripped);
+    if (driveOnly) return `${driveOnly[0]}\\`;
+    const parts = stripped.split(/[\\/]/).filter(Boolean);
+    return parts[parts.length - 1] || stripped;
+  }
 
-  const parts = trimmed.split(/[\\/]/).filter(Boolean);
-  return parts[parts.length - 1] || trimmed;
+  const stripped = trimmed === "/" ? trimmed : trimmed.replace(/\/+$/, "");
+  if (!stripped) return emptyFallback;
+  const idx = stripped.lastIndexOf("/");
+  return idx === -1 ? stripped : stripped.slice(idx + 1) || stripped;
 }
 
 export function truncatePathMiddle(path: string, maxLen = 52): string {

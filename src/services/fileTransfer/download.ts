@@ -139,22 +139,41 @@ async function waitForArchiveReady(
   agentId: string,
   sessionId: string,
   signal?: AbortSignal,
+  onRetrying?: (info: TransientRetryInfo) => void,
 ): Promise<FileTransferDownloadStatusResponse> {
   const deadline = Date.now() + ARCHIVE_PREPARE_TIMEOUT_MS;
+  let retryAttempt = 0;
   for (;;) {
     if (signal?.aborted) {
       throw new DOMException("Download aborted", "AbortError");
     }
-    const status = await getAgentDownloadStatus(agentId, sessionId, signal);
-    if (status.status === "agent_ready" || status.status === "transferring") {
-      return status;
-    }
-    if (
-      status.status === "failed" ||
-      status.status === "cancelled" ||
-      status.status === "expired"
-    ) {
-      throw new Error(status.error || `Archive preparation ${status.status}.`);
+    try {
+      const status = await getAgentDownloadStatus(agentId, sessionId, signal);
+      if (status.status === "agent_ready" || status.status === "transferring") {
+        return status;
+      }
+      if (
+        status.status === "failed" ||
+        status.status === "cancelled" ||
+        status.status === "expired"
+      ) {
+        throw new Error(
+          status.error || `Archive preparation ${status.status}.`,
+        );
+      }
+    } catch (err) {
+      if (isAbortError(err) || !isRetryableTransferError(err)) {
+        throw err;
+      }
+      if (Date.now() >= deadline) {
+        throw err;
+      }
+      retryAttempt += 1;
+      onRetrying?.({
+        attempt: retryAttempt,
+        delayMs: ARCHIVE_STATUS_POLL_INTERVAL_MS,
+        error: err,
+      });
     }
     if (Date.now() >= deadline) {
       throw new Error(
@@ -872,7 +891,12 @@ export async function runArchiveDownloadTransfer(
       : [];
     if (initData.preparing || totalSize < 1) {
       onArchiveBuilding?.();
-      const ready = await waitForArchiveReady(agentId, sessionIdValue, signal);
+      const ready = await waitForArchiveReady(
+        agentId,
+        sessionIdValue,
+        signal,
+        onRetrying,
+      );
       totalSize = ready.total_size;
       chunkSize = ready.chunk_size || chunkSize;
       if (Array.isArray(ready.warnings)) {

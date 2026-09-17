@@ -1,6 +1,7 @@
 import axios from "axios";
 
 import {
+  FILE_TRANSFER_COMPLETE_TIMEOUT_MS,
   FILE_TRANSFER_DOWNLOAD_CHUNK_TIMEOUT_MS,
   FILE_TRANSFER_UPLOAD_CHUNK_TIMEOUT_MS,
 } from "@/constants/fileTransfer";
@@ -92,7 +93,11 @@ export async function completeAgentFileUpload(
   const { data } = await axios.post<FileTransferCompleteUploadResponse>(
     `${baseUrl}/${agentId}/files/upload/${sessionId}/complete/`,
     { sha256 },
-    { timeout: 60_000, signal, ...transferRequestConfig },
+    {
+      ...transferRequestConfig,
+      timeout: FILE_TRANSFER_COMPLETE_TIMEOUT_MS,
+      signal,
+    },
   );
   return data;
 }
@@ -245,7 +250,11 @@ export async function completeAgentFileDownload(
   const { data } = await axios.post<FileTransferCompleteDownloadResponse>(
     `${baseUrl}/${agentId}/files/download/${sessionId}/complete/`,
     {},
-    { timeout: 60_000, signal, ...transferRequestConfig },
+    {
+      ...transferRequestConfig,
+      timeout: FILE_TRANSFER_COMPLETE_TIMEOUT_MS,
+      signal,
+    },
   );
   return data;
 }

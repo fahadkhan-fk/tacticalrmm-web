@@ -60,7 +60,10 @@ export function useFileBrowser(platform: MaybeRef<string> = "windows") {
       const file = path.split(separator).pop();
       return file ? file : "";
     }
-    return fileBrowserPathLeaf(path, { emptyFallback: "" });
+    return fileBrowserPathLeaf(path, {
+      emptyFallback: "",
+      platform: resolvedPlatform.value,
+    });
   }
 
   function getPath(path: string, separator?: "/" | "\\"): string {

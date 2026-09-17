@@ -302,6 +302,7 @@ import {
   isUploadQueueItemTerminal,
   listUploadNameConflicts,
   filesMatchingExistingNames,
+  nameSegmentBaseRule,
   mapApiItemToFileBrowserItem,
   mapApiItemsToFileBrowserItems,
   normalizeAgentListPath,
@@ -2451,13 +2452,28 @@ async function queueFilesForUpload(
     return;
   }
 
+  const skippedInvalidNameFiles = batch.filter(
+    (f) => nameSegmentBaseRule(f.name) !== true,
+  );
+  const skippedInvalidName = skippedInvalidNameFiles.length;
+  const namedOk = batch.filter((f) => nameSegmentBaseRule(f.name) === true);
+
   const maxFileBytes = MAX_UPLOAD_FILE_SIZE_BYTES;
   const skippedOversized =
-    maxFileBytes > 0 ? batch.filter((f) => f.size > maxFileBytes).length : 0;
+    maxFileBytes > 0 ? namedOk.filter((f) => f.size > maxFileBytes).length : 0;
   const sizeOk =
-    maxFileBytes > 0 ? batch.filter((f) => f.size <= maxFileBytes) : batch;
+    maxFileBytes > 0 ? namedOk.filter((f) => f.size <= maxFileBytes) : namedOk;
   let toEnqueue = sizeOk.slice(0, room);
   const skippedDueToQueue = sizeOk.length - toEnqueue.length;
+
+  if (skippedInvalidName > 0) {
+    const reason = nameSegmentBaseRule(skippedInvalidNameFiles[0].name);
+    notes.push(
+      `${skippedInvalidName} file(s) skipped — ${
+        typeof reason === "string" ? reason : "invalid filename"
+      }`,
+    );
+  }
 
   if (skippedOversized > 0) {
     notes.push(
