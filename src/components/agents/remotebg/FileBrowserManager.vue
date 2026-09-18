@@ -279,6 +279,7 @@ import {
 import { isRetryableTransferError } from "@/services/fileTransfer/sessionLimit";
 import {
   createTransferTabSync,
+  isTerminalTransferRelease,
   transferClaimKey,
   type TransferReleaseReason,
   type TransferTabSync,
@@ -1162,22 +1163,22 @@ function itemMatchesClaimKey(
 
 function applyRemoteOwnershipFlags(): void {
   for (const item of uploadQueue.value) {
-    if (item.status === "paused" || item.status === "queued") {
-      const held = uploadClaimKeys.get(item.id);
-      item.ownedByOtherTab =
-        !held && getTabSync().isRemotelyOwned(claimKeyForUpload(item));
-    } else if (isUploadQueueItemActive(item.status)) {
+    if (isUploadQueueItemTerminal(item.status)) {
       item.ownedByOtherTab = false;
+      continue;
     }
+    const held = uploadClaimKeys.get(item.id);
+    item.ownedByOtherTab =
+      !held && getTabSync().isRemotelyOwned(claimKeyForUpload(item));
   }
   for (const item of downloadQueue.value) {
-    if (item.status === "paused" || item.status === "queued") {
-      const held = downloadClaimKeys.get(item.id);
-      item.ownedByOtherTab =
-        !held && getTabSync().isRemotelyOwned(claimKeyForDownload(item));
-    } else if (isDownloadQueueItemActive(item.status)) {
+    if (isDownloadQueueItemTerminal(item.status)) {
       item.ownedByOtherTab = false;
+      continue;
     }
+    const held = downloadClaimKeys.get(item.id);
+    item.ownedByOtherTab =
+      !held && getTabSync().isRemotelyOwned(claimKeyForDownload(item));
   }
 }
 
@@ -1213,6 +1214,43 @@ function broadcastCancelForItem(item: {
   getTabSync().release(sessionKey, "cancel");
   if (localKey !== sessionKey) {
     getTabSync().release(localKey, "cancel");
+  }
+}
+
+function yieldLocalTransferForClaimKey(key: string): void {
+  for (const item of uploadQueue.value) {
+    if (!itemMatchesClaimKey(item, key)) continue;
+    if (isUploadQueueItemTerminal(item.status)) continue;
+    uploadClaimKeys.delete(item.id);
+    if (item.status === "queued") {
+      item.status = "paused";
+      continue;
+    }
+    if (isUploadQueueItemActive(item.status)) {
+      setTransferAbortMode(
+        uploadAbortIntents,
+        uploadAbortControllers,
+        item.id,
+        "pause",
+      );
+    }
+  }
+  for (const item of downloadQueue.value) {
+    if (!itemMatchesClaimKey(item, key)) continue;
+    if (isDownloadQueueItemTerminal(item.status)) continue;
+    downloadClaimKeys.delete(item.id);
+    if (item.status === "queued") {
+      item.status = "paused";
+      continue;
+    }
+    if (isDownloadQueueItemActive(item.status)) {
+      setTransferAbortMode(
+        downloadAbortIntents,
+        downloadAbortControllers,
+        item.id,
+        "pause",
+      );
+    }
   }
 }
 
@@ -1302,9 +1340,67 @@ function abortLocalTransferForClaimKey(key: string): void {
   }
 }
 
+function dropLocalTransfersForRemoteTerminal(key: string): void {
+  const dropDownloads = downloadQueue.value.filter((item) =>
+    itemMatchesClaimKey(item, key),
+  );
+  for (const item of dropDownloads) {
+    if (isDownloadQueueItemActive(item.status)) {
+      setTransferAbortMode(
+        downloadAbortIntents,
+        downloadAbortControllers,
+        item.id,
+        "pause",
+      );
+    }
+    downloadClaimKeys.delete(item.id);
+    deleteLocalPausedEntry(props.agent_id, item.id);
+  }
+  if (dropDownloads.length) {
+    const dropIds = new Set(dropDownloads.map((item) => item.id));
+    downloadQueue.value = downloadQueue.value.filter(
+      (item) => !dropIds.has(item.id),
+    );
+    if (!downloadQueue.value.length) {
+      resetDownloadUiState();
+    }
+  }
+
+  const dropUploads = uploadQueue.value.filter((item) =>
+    itemMatchesClaimKey(item, key),
+  );
+  for (const item of dropUploads) {
+    if (isUploadQueueItemActive(item.status)) {
+      setTransferAbortMode(
+        uploadAbortIntents,
+        uploadAbortControllers,
+        item.id,
+        "pause",
+      );
+    }
+    uploadClaimKeys.delete(item.id);
+    deleteLocalPausedEntry(props.agent_id, item.id);
+  }
+  if (dropUploads.length) {
+    const dropIds = new Set(dropUploads.map((item) => item.id));
+    uploadQueue.value = uploadQueue.value.filter(
+      (item) => !dropIds.has(item.id),
+    );
+  }
+}
+
 function onTransferTabSyncEvent(event: TransferTabSyncEvent): void {
   if (event.type === "remote_release" && event.reason === "cancel") {
     abortLocalTransferForClaimKey(event.key);
+  }
+  if (
+    event.type === "remote_release" &&
+    isTerminalTransferRelease(event.reason)
+  ) {
+    dropLocalTransfersForRemoteTerminal(event.key);
+  }
+  if (event.type === "remote_claim") {
+    yieldLocalTransferForClaimKey(event.key);
   }
   if (
     event.type === "remote_change" ||
@@ -1905,7 +2001,9 @@ async function runSingleDownload(itemId: string): Promise<void> {
       const mode = downloadAbortIntents.get(itemId)?.mode ?? "pause";
       current.status = mode === "cancel" ? "cancelled" : "paused";
       current.errorMessage = undefined;
-      current.ownedByOtherTab = false;
+      current.ownedByOtherTab =
+        mode !== "cancel" &&
+        getTabSync().isRemotelyOwned(claimKeyForDownload(current));
       if (mode === "cancel") {
         releaseDownloadClaim(itemId, "cancel");
         const sid = current.sessionId;
@@ -1930,7 +2028,11 @@ async function runSingleDownload(itemId: string): Promise<void> {
       }
       if (downloadBatchIsSingle.value && downloadQueue.value.length === 1) {
         notifyInfo(
-          mode === "cancel" ? "Download cancelled." : "Download paused.",
+          mode === "cancel"
+            ? "Download cancelled."
+            : current.ownedByOtherTab
+              ? "This download is open in another tab."
+              : "Download paused.",
         );
       }
       return;
@@ -2715,7 +2817,9 @@ async function runSingleUpload(itemId: string): Promise<void> {
       const mode = uploadAbortIntents.get(itemId)?.mode ?? "pause";
       current.status = mode === "cancel" ? "cancelled" : "paused";
       current.errorMessage = undefined;
-      current.ownedByOtherTab = false;
+      current.ownedByOtherTab =
+        mode !== "cancel" &&
+        getTabSync().isRemotelyOwned(claimKeyForUpload(current));
       if (mode === "cancel") {
         releaseUploadClaim(itemId, "cancel");
         const sid = current.sessionId;
@@ -2731,7 +2835,13 @@ async function runSingleUpload(itemId: string): Promise<void> {
         void persistUploadQueueMeta(props.agent_id, current);
       }
       if (!multiBatch) {
-        notifyInfo(mode === "cancel" ? "Upload cancelled." : "Upload paused.");
+        notifyInfo(
+          mode === "cancel"
+            ? "Upload cancelled."
+            : current.ownedByOtherTab
+              ? "This upload is open in another tab."
+              : "Upload paused.",
+        );
       }
       return;
     }

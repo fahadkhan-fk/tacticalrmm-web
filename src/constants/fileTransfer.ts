@@ -6,6 +6,7 @@ export const ARCHIVE_STATUS_POLL_INTERVAL_MS = 1_500;
 export const MAX_IN_MEMORY_DOWNLOAD_BYTES = 512 * 1024 * 1024;
 export const FILE_TRANSFER_UPLOAD_RESUME_LS_KEY = "trmm-resume-up";
 export const FILE_TRANSFER_DOWNLOAD_RESUME_LS_KEY = "trmm-resume-dl";
+export const FILE_TRANSFER_RESUME_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 export const FILE_TRANSFER_DOWNLOAD_IDB_NAME = "trmm-transfer";
 export const FILE_TRANSFER_DOWNLOAD_IDB_STORE = "handles";
 export const FILE_TRANSFER_DOWNLOAD_BYTES_STORE = "download_bytes";

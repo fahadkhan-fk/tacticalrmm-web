@@ -11,6 +11,24 @@ export type TransferReleaseReason =
   | "fail"
   | "unmount";
 
+export function isTerminalTransferRelease(
+  reason: TransferReleaseReason,
+): boolean {
+  return reason === "complete" || reason === "fail";
+}
+
+export function claimShouldYield(
+  localTabId: string,
+  localTs: number,
+  remoteTabId: string,
+  remoteTs: number,
+): boolean {
+  if (remoteTs !== localTs) {
+    return remoteTs < localTs;
+  }
+  return remoteTabId < localTabId;
+}
+
 export type TransferTabSyncEvent =
   | { type: "remote_claim"; key: string; tabId: string }
   | {
@@ -75,6 +93,7 @@ export function createTransferTabSync(
 ): TransferTabSync {
   const tabId = newTabId();
   const localClaims = new Set<string>();
+  const localClaimTs = new Map<string, number>();
   const remoteClaims = new Map<string, RemoteClaim>();
   let closed = false;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
@@ -147,6 +166,32 @@ export function createTransferTabSync(
     }
   }
 
+  function considerRemoteClaim(
+    key: string,
+    ownerTabId: string,
+    ts: number,
+  ): void {
+    if (ownerTabId === tabId) return;
+    if (localClaims.has(key)) {
+      const localTs = localClaimTs.get(key) ?? 0;
+      if (!claimShouldYield(tabId, localTs, ownerTabId, ts)) {
+        post({
+          type: "announce",
+          key,
+          tabId,
+          ts: localTs || Date.now(),
+        });
+        return;
+      }
+      localClaims.delete(key);
+      localClaimTs.delete(key);
+      stopHeartbeatIfIdle();
+      setRemoteClaim(key, ownerTabId, ts);
+      return;
+    }
+    setRemoteClaim(key, ownerTabId, ts);
+  }
+
   function clearRemoteClaim(
     key: string,
     ownerTabId: string,
@@ -170,15 +215,10 @@ export function createTransferTabSync(
       case "claim":
       case "heartbeat":
       case "announce":
-        if (localClaims.has(msg.key)) {
-          post({ type: "announce", key: msg.key, tabId, ts: Date.now() });
-          break;
-        }
-        setRemoteClaim(msg.key, msg.tabId, msg.ts || Date.now());
+        considerRemoteClaim(msg.key, msg.tabId, msg.ts || Date.now());
         break;
       case "release":
-        if (msg.reason === "cancel") {
-          // Any tab may cancel a server session; notify so the owner aborts.
+        if (msg.reason === "cancel" || isTerminalTransferRelease(msg.reason)) {
           remoteClaims.delete(msg.key);
           emit({
             type: "remote_release",
@@ -215,16 +255,20 @@ export function createTransferTabSync(
 
   function tryClaim(key: string): boolean {
     if (!channel) {
+      const ts = Date.now();
       localClaims.add(key);
+      localClaimTs.set(key, ts);
       return true;
     }
     pruneRemote();
     if (isRemotelyOwned(key) && !localClaims.has(key)) {
       return false;
     }
+    const ts = Date.now();
     localClaims.add(key);
+    localClaimTs.set(key, ts);
     remoteClaims.delete(key);
-    post({ type: "claim", key, tabId, ts: Date.now() });
+    post({ type: "claim", key, tabId, ts });
     ensureHeartbeat();
     return true;
   }
@@ -237,18 +281,23 @@ export function createTransferTabSync(
       return tryClaim(newKey);
     }
     if (!channel) {
+      const ts = localClaimTs.get(oldKey) ?? Date.now();
       localClaims.delete(oldKey);
+      localClaimTs.delete(oldKey);
       localClaims.add(newKey);
+      localClaimTs.set(newKey, ts);
       return true;
     }
     pruneRemote();
     if (isRemotelyOwned(newKey) && !localClaims.has(newKey)) {
       return false;
     }
-    localClaims.delete(oldKey);
-    localClaims.add(newKey);
-    remoteClaims.delete(newKey);
     const ts = Date.now();
+    localClaims.delete(oldKey);
+    localClaimTs.delete(oldKey);
+    localClaims.add(newKey);
+    localClaimTs.set(newKey, ts);
+    remoteClaims.delete(newKey);
     post({ type: "release", key: oldKey, tabId, reason: "pause", ts });
     post({ type: "claim", key: newKey, tabId, ts });
     ensureHeartbeat();
@@ -257,8 +306,9 @@ export function createTransferTabSync(
 
   function release(key: string, reason: TransferReleaseReason): void {
     const wasLocal = localClaims.delete(key);
+    localClaimTs.delete(key);
     stopHeartbeatIfIdle();
-    if (wasLocal || reason === "cancel") {
+    if (wasLocal || reason === "cancel" || isTerminalTransferRelease(reason)) {
       post({ type: "release", key, tabId, reason, ts: Date.now() });
     }
   }
@@ -266,6 +316,7 @@ export function createTransferTabSync(
   function releaseAll(reason: TransferReleaseReason = "unmount"): void {
     const keys = [...localClaims];
     localClaims.clear();
+    localClaimTs.clear();
     stopHeartbeatIfIdle();
     const ts = Date.now();
     for (const key of keys) {

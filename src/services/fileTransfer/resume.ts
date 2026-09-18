@@ -6,6 +6,7 @@ import {
   FILE_TRANSFER_DOWNLOAD_IDB_STORE,
   FILE_TRANSFER_DOWNLOAD_RESUME_LS_KEY,
   FILE_TRANSFER_IDB_VERSION,
+  FILE_TRANSFER_RESUME_MAX_AGE_MS,
   FILE_TRANSFER_UI_META_IDB_STORE,
   FILE_TRANSFER_UPLOAD_RESUME_LS_KEY,
 } from "@/constants/fileTransfer";
@@ -33,6 +34,35 @@ function lsGet<T extends Record<string, unknown>>(key: string): T {
 
 function lsSet(key: string, value: Record<string, unknown>): void {
   localStorage.setItem(key, JSON.stringify(value));
+}
+
+export function pruneAgedResumeEntries<T extends { ts?: number }>(
+  map: Record<string, T>,
+  now = Date.now(),
+  maxAgeMs = FILE_TRANSFER_RESUME_MAX_AGE_MS,
+): { next: Record<string, T>; removed: number } {
+  const next: Record<string, T> = {};
+  let removed = 0;
+  for (const [key, entry] of Object.entries(map)) {
+    const ts = entry?.ts;
+    if (typeof ts !== "number" || !Number.isFinite(ts) || now - ts > maxAgeMs) {
+      removed += 1;
+      continue;
+    }
+    next[key] = entry;
+  }
+  return { next, removed };
+}
+
+function lsGetResumeMap<T extends { ts?: number }>(
+  key: string,
+): Record<string, T> {
+  const raw = lsGet<Record<string, T>>(key);
+  const { next, removed } = pruneAgedResumeEntries(raw);
+  if (removed > 0) {
+    lsSet(key, next);
+  }
+  return next;
 }
 
 export function uploadResumeKey(
@@ -111,6 +141,49 @@ export async function pickExistingDownloadHandle(): Promise<FileSystemFileHandle
   return handle;
 }
 
+export async function removeFileSystemFileHandle(
+  handle: FileSystemFileHandle,
+): Promise<boolean> {
+  const remover = (
+    handle as FileSystemFileHandle & { remove?: () => Promise<void> }
+  ).remove;
+  if (typeof remover !== "function") {
+    return false;
+  }
+  try {
+    await remover.call(handle);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function abortWritableAndMaybeRemoveFile(opts: {
+  writable: FileSystemWritableFileStream | null | undefined;
+  handle: FileSystemFileHandle | null | undefined;
+  discardFile: boolean;
+}): Promise<void> {
+  const { writable, handle, discardFile } = opts;
+  if (writable) {
+    try {
+      if (discardFile && typeof writable.abort === "function") {
+        await writable.abort();
+      } else {
+        await writable.close();
+      }
+    } catch {
+      try {
+        await writable.close();
+      } catch {
+        // Already closed.
+      }
+    }
+  }
+  if (discardFile && handle) {
+    await removeFileSystemFileHandle(handle);
+  }
+}
+
 export async function persistDownloadFileHandle(
   keys: Array<string | null | undefined>,
   handle: FileSystemFileHandle,
@@ -126,7 +199,7 @@ export function loadUploadResume(
   file: File,
   destinationPath: string,
 ): UploadResumeEntry | null {
-  const entry = lsGet<Record<string, UploadResumeEntry>>(
+  const entry = lsGetResumeMap<UploadResumeEntry>(
     FILE_TRANSFER_UPLOAD_RESUME_LS_KEY,
   )[uploadResumeKey(agentId, file, destinationPath)];
   return entry ?? null;
@@ -138,7 +211,7 @@ export function saveUploadResume(
   destinationPath: string,
   sessionId: string,
 ): void {
-  const map = lsGet<Record<string, UploadResumeEntry>>(
+  const map = lsGetResumeMap<UploadResumeEntry>(
     FILE_TRANSFER_UPLOAD_RESUME_LS_KEY,
   );
   map[uploadResumeKey(agentId, file, destinationPath)] = {
@@ -154,7 +227,7 @@ export function clearUploadResume(
   file: File,
   destinationPath: string,
 ): void {
-  const map = lsGet<Record<string, UploadResumeEntry>>(
+  const map = lsGetResumeMap<UploadResumeEntry>(
     FILE_TRANSFER_UPLOAD_RESUME_LS_KEY,
   );
   delete map[uploadResumeKey(agentId, file, destinationPath)];
@@ -165,7 +238,7 @@ export function loadDownloadResume(
   agentId: string,
   sourcePath: string,
 ): DownloadResumeEntry | null {
-  const entry = lsGet<Record<string, DownloadResumeEntry>>(
+  const entry = lsGetResumeMap<DownloadResumeEntry>(
     FILE_TRANSFER_DOWNLOAD_RESUME_LS_KEY,
   )[downloadResumeKey(agentId, sourcePath)];
   return entry ?? null;
@@ -176,7 +249,7 @@ export function saveDownloadResume(
   sourcePath: string,
   data: Omit<DownloadResumeEntry, "ts">,
 ): void {
-  const map = lsGet<Record<string, DownloadResumeEntry>>(
+  const map = lsGetResumeMap<DownloadResumeEntry>(
     FILE_TRANSFER_DOWNLOAD_RESUME_LS_KEY,
   );
   map[downloadResumeKey(agentId, sourcePath)] = { ...data, ts: Date.now() };
@@ -184,7 +257,7 @@ export function saveDownloadResume(
 }
 
 export function clearDownloadResume(agentId: string, sourcePath: string): void {
-  const map = lsGet<Record<string, DownloadResumeEntry>>(
+  const map = lsGetResumeMap<DownloadResumeEntry>(
     FILE_TRANSFER_DOWNLOAD_RESUME_LS_KEY,
   );
   delete map[downloadResumeKey(agentId, sourcePath)];
@@ -192,7 +265,7 @@ export function clearDownloadResume(agentId: string, sourcePath: string): void {
 }
 
 export function clearUploadResumeBySessionId(sessionId: string): void {
-  const map = lsGet<Record<string, UploadResumeEntry>>(
+  const map = lsGetResumeMap<UploadResumeEntry>(
     FILE_TRANSFER_UPLOAD_RESUME_LS_KEY,
   );
   let changed = false;
@@ -206,7 +279,7 @@ export function clearUploadResumeBySessionId(sessionId: string): void {
 }
 
 export function clearDownloadResumeBySessionId(sessionId: string): void {
-  const map = lsGet<Record<string, DownloadResumeEntry>>(
+  const map = lsGetResumeMap<DownloadResumeEntry>(
     FILE_TRANSFER_DOWNLOAD_RESUME_LS_KEY,
   );
   let changed = false;
@@ -223,7 +296,7 @@ export function findDownloadResumeScopeKeyBySessionId(
   agentId: string,
   sessionId: string,
 ): string | null {
-  const map = lsGet<Record<string, DownloadResumeEntry>>(
+  const map = lsGetResumeMap<DownloadResumeEntry>(
     FILE_TRANSFER_DOWNLOAD_RESUME_LS_KEY,
   );
   const prefix = `${agentId}:`;
@@ -235,27 +308,87 @@ export function findDownloadResumeScopeKeyBySessionId(
   return null;
 }
 
+let fileTransferIdb: IDBDatabase | null = null;
+let fileTransferIdbOpening: Promise<IDBDatabase> | null = null;
+let fileTransferIdbPagehideBound = false;
+
+function ensureFileTransferStores(db: IDBDatabase): void {
+  if (!db.objectStoreNames.contains(FILE_TRANSFER_DOWNLOAD_IDB_STORE)) {
+    db.createObjectStore(FILE_TRANSFER_DOWNLOAD_IDB_STORE);
+  }
+  if (!db.objectStoreNames.contains(FILE_TRANSFER_UI_META_IDB_STORE)) {
+    db.createObjectStore(FILE_TRANSFER_UI_META_IDB_STORE);
+  }
+  if (!db.objectStoreNames.contains(FILE_TRANSFER_DOWNLOAD_BYTES_STORE)) {
+    db.createObjectStore(FILE_TRANSFER_DOWNLOAD_BYTES_STORE);
+  }
+}
+
+function bindFileTransferIdbPagehide(): void {
+  if (fileTransferIdbPagehideBound || typeof window === "undefined") {
+    return;
+  }
+  fileTransferIdbPagehideBound = true;
+  window.addEventListener("pagehide", () => {
+    closeFileTransferIdb();
+  });
+}
+
+function attachFileTransferIdbLifecycle(db: IDBDatabase): void {
+  db.onversionchange = () => {
+    closeFileTransferIdb();
+  };
+  db.onclose = () => {
+    if (fileTransferIdb === db) {
+      fileTransferIdb = null;
+    }
+  };
+}
+
+export function closeFileTransferIdb(): void {
+  const db = fileTransferIdb;
+  fileTransferIdb = null;
+  fileTransferIdbOpening = null;
+  if (!db) {
+    return;
+  }
+  try {
+    db.close();
+  } catch {
+    // already closed.
+  }
+}
+
 function openTransferIdb(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
+  if (fileTransferIdb) {
+    return Promise.resolve(fileTransferIdb);
+  }
+  if (fileTransferIdbOpening) {
+    return fileTransferIdbOpening;
+  }
+
+  bindFileTransferIdbPagehide();
+  fileTransferIdbOpening = new Promise((resolve, reject) => {
     const request = indexedDB.open(
       FILE_TRANSFER_DOWNLOAD_IDB_NAME,
       FILE_TRANSFER_IDB_VERSION,
     );
     request.onupgradeneeded = () => {
-      const db = request.result;
-      if (!db.objectStoreNames.contains(FILE_TRANSFER_DOWNLOAD_IDB_STORE)) {
-        db.createObjectStore(FILE_TRANSFER_DOWNLOAD_IDB_STORE);
-      }
-      if (!db.objectStoreNames.contains(FILE_TRANSFER_UI_META_IDB_STORE)) {
-        db.createObjectStore(FILE_TRANSFER_UI_META_IDB_STORE);
-      }
-      if (!db.objectStoreNames.contains(FILE_TRANSFER_DOWNLOAD_BYTES_STORE)) {
-        db.createObjectStore(FILE_TRANSFER_DOWNLOAD_BYTES_STORE);
-      }
+      ensureFileTransferStores(request.result);
     };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const db = request.result;
+      attachFileTransferIdbLifecycle(db);
+      fileTransferIdb = db;
+      fileTransferIdbOpening = null;
+      resolve(db);
+    };
+    request.onerror = () => {
+      fileTransferIdbOpening = null;
+      reject(request.error);
+    };
   });
+  return fileTransferIdbOpening;
 }
 
 export function openFileTransferIdb(): Promise<IDBDatabase> {

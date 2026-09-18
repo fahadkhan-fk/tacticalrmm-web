@@ -29,6 +29,8 @@ import { writeDownloadChunkThenAck } from "./downloadChunkCommit";
 import {
   archiveDownloadHandleIdbKey,
   archiveDownloadResumeKey,
+  abortWritableAndMaybeRemoveFile,
+  alignResumeOffset,
   clearDownloadResume,
   persistDownloadFileHandle,
   downloadBytesPathKey,
@@ -80,7 +82,7 @@ interface DownloadSink {
   resetForNewSession(): Promise<void>;
   bindSession?(sessionId: string): Promise<void>;
   finalize(): Promise<void>;
-  abort(): Promise<void>;
+  abort(opts?: { discardFile?: boolean }): Promise<void>;
 }
 
 function trimBuffersToOffset(
@@ -115,6 +117,17 @@ async function releaseDownloadSession(
   } catch {
     // frees agent session slot for retry
   }
+}
+
+async function abortDownloadSink(
+  sink: DownloadSink,
+  err: unknown,
+  abortIntent?: TransferAbortIntent,
+): Promise<void> {
+  const discardFile =
+    (isAbortError(err) && abortIntent?.mode === "cancel") ||
+    (!isAbortError(err) && !isRetryableTransferError(err));
+  await sink.abort({ discardFile });
 }
 
 async function discardDownloadResumeState(
@@ -476,7 +489,14 @@ async function createDownloadSink(
             await idbDeleteDownloadBytes(key).catch(() => {});
           }
         },
-        async abort() {
+        async abort(opts?: { discardFile?: boolean }) {
+          if (opts?.discardFile) {
+            buffers = null;
+            for (const key of persistKeys) {
+              await idbDeleteDownloadBytes(key).catch(() => {});
+            }
+            return;
+          }
           await persistIdbBytes();
         },
       };
@@ -532,15 +552,13 @@ async function createDownloadSink(
         buffers = null;
       }
     },
-    async abort() {
-      if (writable) {
-        try {
-          await writable.close();
-        } catch {
-          // partial file kept for resume
-        }
-        writable = null;
-      }
+    async abort(opts?: { discardFile?: boolean }) {
+      await abortWritableAndMaybeRemoveFile({
+        writable,
+        handle: fileHandle,
+        discardFile: !!opts?.discardFile,
+      });
+      writable = null;
     },
   };
 
@@ -714,7 +732,7 @@ export async function runFileDownloadTransfer(
       bytesWritten: totalSize,
     };
   } catch (err) {
-    await sink.abort();
+    await abortDownloadSink(sink, err, abortIntent);
     if (isAbortError(err)) {
       if (abortIntent?.mode === "cancel") {
         await releaseDownloadSession(agentId, sessionId, "user");
@@ -975,7 +993,7 @@ export async function runArchiveDownloadTransfer(
       warnings: warnings.length > 0 ? warnings : undefined,
     };
   } catch (err) {
-    await sink.abort();
+    await abortDownloadSink(sink, err, abortIntent);
     if (isAbortError(err)) {
       if (abortIntent?.mode === "cancel") {
         await releaseDownloadSession(agentId, sessionId, "user");
