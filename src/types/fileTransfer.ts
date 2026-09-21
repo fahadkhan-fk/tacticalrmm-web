@@ -16,6 +16,16 @@ export interface FileTransferUploadChunkResponse {
   chunk_bytes: number;
 }
 
+export interface FileTransferUploadChunkReadyResponse {
+  session_id: string;
+  status: string;
+  accepted_offset: number;
+  committed_offset: number;
+  chunk_size: number;
+  total_size: number;
+  can_put: boolean;
+}
+
 export interface FileTransferCompleteUploadResponse {
   session_id: string;
   status: string;

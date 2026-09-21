@@ -4,6 +4,7 @@ import {
   FILE_TRANSFER_COMPLETE_TIMEOUT_MS,
   FILE_TRANSFER_DOWNLOAD_CHUNK_TIMEOUT_MS,
   FILE_TRANSFER_UPLOAD_CHUNK_TIMEOUT_MS,
+  FILE_TRANSFER_UPLOAD_READY_TIMEOUT_MS,
 } from "@/constants/fileTransfer";
 import type {
   FileTransferCompleteDownloadResponse,
@@ -11,6 +12,7 @@ import type {
   FileTransferDownloadStatusResponse,
   FileTransferInitDownloadResponse,
   FileTransferInitUploadResponse,
+  FileTransferUploadChunkReadyResponse,
   FileTransferUploadChunkResponse,
   ResumableFileTransfersResponse,
 } from "@/types/fileTransfer";
@@ -57,6 +59,22 @@ export async function resumeAgentFileUpload(
     `${baseUrl}/${agentId}/files/upload/init/`,
     payload,
     { timeout: 60_000, signal, ...transferRequestConfig },
+  );
+  return data;
+}
+
+export async function getUploadChunkReady(
+  agentId: string,
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<FileTransferUploadChunkReadyResponse> {
+  const { data } = await axios.get<FileTransferUploadChunkReadyResponse>(
+    `${baseUrl}/${agentId}/files/upload/${sessionId}/chunk/`,
+    {
+      timeout: FILE_TRANSFER_UPLOAD_READY_TIMEOUT_MS,
+      signal,
+      ...transferRequestConfig,
+    },
   );
   return data;
 }
