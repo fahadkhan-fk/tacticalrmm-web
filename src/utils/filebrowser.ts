@@ -315,6 +315,86 @@ export function isDuplicateNameError(err: unknown, message?: string): boolean {
   return /already exists|already contains/i.test(text);
 }
 
+function deletePathIdentityKey(
+  path: string,
+  platform: string | undefined,
+): string {
+  const isWindows = (platform ?? "").toLowerCase() === "windows";
+  let key = path.trim();
+  if (isWindows) {
+    key = key.replace(/\//g, "\\").toLowerCase();
+    return key.replace(/\\+$/g, "");
+  }
+  if (key !== "/") {
+    key = key.replace(/\/+$/g, "");
+  }
+  return key;
+}
+
+const WINDOWS_PROTECTED_DELETE_PATHS = new Set([
+  "c:\\windows",
+  "c:\\windows\\system32",
+  "c:\\windows\\syswow64",
+  "c:\\program files",
+  "c:\\program files (x86)",
+  "c:\\programdata",
+  "c:\\users",
+]);
+
+const UNIX_PROTECTED_DELETE_PATHS = new Set([
+  "/bin",
+  "/sbin",
+  "/usr",
+  "/usr/bin",
+  "/usr/sbin",
+  "/usr/lib",
+  "/usr/lib64",
+  "/lib",
+  "/lib64",
+  "/etc",
+  "/boot",
+  "/dev",
+  "/proc",
+  "/sys",
+  "/run",
+  "/root",
+  "/home",
+  "/opt",
+  "/var",
+  "/usr/local",
+  "/Users",
+  "/users",
+]);
+
+export function isLikelyProtectedDeletePath(
+  path: string,
+  platform?: string,
+): boolean {
+  const key = deletePathIdentityKey(path, platform);
+  if (!key) return false;
+  const isWindows = (platform ?? "").toLowerCase() === "windows";
+  if (isWindows) {
+    if (/^[a-z]:$/.test(key)) return true;
+    return WINDOWS_PROTECTED_DELETE_PATHS.has(key);
+  }
+  if (key === "/") return true;
+  if (
+    (platform ?? "").toLowerCase() === "darwin" &&
+    (key === "/System" || key === "/Library")
+  ) {
+    return true;
+  }
+  return UNIX_PROTECTED_DELETE_PATHS.has(key);
+}
+
+export function fileBrowserDeleteErrorMessage(error?: string): string {
+  const text = (error ?? "").trim();
+  if (/^protected path$/i.test(text)) {
+    return "protected system or agent path";
+  }
+  return text;
+}
+
 export function getFileBrowserErrorMessage(
   err: unknown,
   fallback = "Unable to complete the operation.",

@@ -291,8 +291,10 @@ import {
   fileListToArray,
   classifyDownloadSelection,
   deriveArchiveDownloadName,
+  fileBrowserDeleteErrorMessage,
   getFileBrowserErrorMessage,
   isDuplicateNameError,
+  isLikelyProtectedDeletePath,
   getListFilesErrorMessage,
   normalizeFileBrowserFilterQuery,
   isListFilesAgentOfflineError,
@@ -905,9 +907,20 @@ const deleteConfirmTitle = computed(() => {
   return `Delete ${pending.length} items ?`;
 });
 
+const pendingDeleteLooksProtected = computed(() =>
+  deletePendingItems.value.some((item) =>
+    isLikelyProtectedDeletePath(item.path, agentPlatform.value),
+  ),
+);
+
 const deleteConfirmBody = computed(() => {
   const n = deletePendingItems.value.length;
   if (n === 0) return "";
+  if (pendingDeleteLooksProtected.value) {
+    return n === 1
+      ? "This looks like a protected system folder. The agent will refuse to delete it."
+      : "One or more items look like protected system folders. The agent will refuse to delete those paths.";
+  }
   if (n === 1) return "This item will be permanently deleted.";
   return "These items will be permanently deleted.";
 });
@@ -1074,7 +1087,9 @@ function notifyDeleteResults(
     const detail = failed
       .map((result) => {
         const name = pendingItemName(pending, result.path);
-        return result.error ? `${name}: ${result.error}` : name;
+        return result.error
+          ? `${name}: ${fileBrowserDeleteErrorMessage(result.error)}`
+          : name;
       })
       .join("; ");
     notifyError(detail || "Unable to delete items.");
