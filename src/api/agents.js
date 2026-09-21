@@ -412,54 +412,6 @@ export async function fetchAgentFiles(
   return data;
 }
 
-export async function fetchAgentFilesAll(
-  agent_id,
-  path,
-  pageSize = FILE_BROWSER_DEFAULT_PAGE_SIZE,
-  platform,
-  filter = "",
-) {
-  const normalizedPath = normalizeAgentListPath(path, platform);
-  let page = 1;
-  let combinedItems = [];
-  let lastResponse = null;
-
-  while (true) {
-    const data = await fetchAgentFiles(
-      agent_id,
-      normalizedPath,
-      page,
-      pageSize,
-      platform,
-      filter,
-    );
-    lastResponse = data;
-    combinedItems = combinedItems.concat(data.items ?? []);
-    if (!data.has_more) break;
-    page += 1;
-  }
-
-  if (!lastResponse) {
-    return {
-      path: normalizedPath,
-      items: [],
-      has_more: false,
-      page: 1,
-      page_size: pageSize,
-      total: 0,
-    };
-  }
-
-  return {
-    ...lastResponse,
-    items: combinedItems,
-    has_more: false,
-    page: 1,
-    page_size: pageSize,
-    total: combinedItems.length,
-  };
-}
-
 export async function fetchAgentFileProperties(agent_id, path, platform) {
   const normalizedPath = normalizeAgentListPath(path, platform);
   const { data } = await axios.get(`${baseUrl}/${agent_id}/files/properties/`, {

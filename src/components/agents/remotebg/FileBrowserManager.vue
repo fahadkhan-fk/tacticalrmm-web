@@ -372,6 +372,7 @@ const uploadQueue = ref<UploadQueueItem[]>([]);
 const uploadAbortControllers = new Map<string, AbortController>();
 const uploadAbortIntents = new Map<string, TransferAbortIntent>();
 let uploadProcessorRunning = false;
+let uploadListingNeedsRefresh = false;
 let uploadIdSeq = 0;
 let uploadNotifyBatchIds: Set<string> | null = null;
 
@@ -612,8 +613,12 @@ function initializeRootPath() {
   historyIndex.value = 0;
 }
 
-async function refresh() {
+async function refresh(opts?: { preserveSelection?: boolean }) {
   const path = normalizeNavPath(currentPath.value.trim());
+  const preserveSelection = opts?.preserveSelection === true;
+  const keptIds = preserveSelection
+    ? new Set(selectedRows.value.map((row) => row.id))
+    : null;
 
   const previousPath = currentPath.value;
   const requestingDefault = !path;
@@ -631,7 +636,9 @@ async function refresh() {
   loading.value = true;
   loadingMore.value = false;
   listError.value = null;
-  selectedRows.value = [];
+  if (!preserveSelection) {
+    selectedRows.value = [];
+  }
   resetListPagingState();
 
   // Only clear rows when the folder actually changes.
@@ -666,10 +673,14 @@ async function refresh() {
     );
     applyListPageMeta(data);
     listError.value = null;
+    if (keptIds && keptIds.size) {
+      selectedRows.value = rows.value.filter((row) => keptIds.has(row.id));
+    }
   } catch (err: unknown) {
     if (seq !== loadSeq) return;
 
     rows.value = [];
+    selectedRows.value = [];
     resetListPagingState();
     const message = getListFilesErrorMessage(err);
     listError.value = message;
@@ -2823,7 +2834,9 @@ async function runSingleUpload(itemId: string): Promise<void> {
     if (!multiBatch) {
       notifySuccess(`Uploaded "${item.name}"`);
     }
-    await refresh();
+    if (pathsEqual(item.destinationPath, currentPath.value)) {
+      uploadListingNeedsRefresh = true;
+    }
   } catch (err: unknown) {
     const current = findUploadItem(itemId);
     if (!current) return;
@@ -2930,7 +2943,12 @@ async function processUploadQueue(): Promise<void> {
       notifyUploadBatchSummary(succeeded, failed, paused, cancelled);
     }
 
-    if (uploadQueue.value.some((i) => i.status === "queued")) {
+    const restart = uploadQueue.value.some((i) => i.status === "queued");
+    if (uploadListingNeedsRefresh && !restart) {
+      uploadListingNeedsRefresh = false;
+      void refresh({ preserveSelection: true });
+    }
+    if (restart) {
       void processUploadQueue();
     }
   }
