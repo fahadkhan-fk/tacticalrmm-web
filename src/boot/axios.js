@@ -31,6 +31,13 @@ function isRequestCanceled(error) {
   );
 }
 
+function rejectAxios(error) {
+  if (error?.config?.skipGlobalErrorNotify) {
+    return Promise.reject(error);
+  }
+  return Promise.reject({ ...error });
+}
+
 export default function ({ app, router }) {
   app.config.globalProperties.$axios = axios;
   axios.defaults.withCredentials = true;
@@ -56,7 +63,7 @@ export default function ({ app, router }) {
     },
     async function (error) {
       if (isRequestCanceled(error)) {
-        return Promise.reject(error);
+        return rejectAxios(error);
       }
 
       const status = error.response?.status;
@@ -76,7 +83,7 @@ export default function ({ app, router }) {
             "Open your browser's dev tools and check the console tab for more detailed error messages",
           timeout: 5000,
         });
-        return Promise.reject(error);
+        return rejectAxios(error);
       }
 
       let text;
@@ -92,7 +99,7 @@ export default function ({ app, router }) {
           error.config.method === "patch" ||
           error.config.url === "accounts/ssoproviders/token/"
         )
-          return Promise.reject(error);
+          return rejectAxios(error);
         text = error.response.data.detail;
       } else if (status >= 400 && status < 500 && status !== 423) {
         if (error.config.responseType === "blob") {
@@ -125,7 +132,7 @@ export default function ({ app, router }) {
         });
       }
 
-      return Promise.reject(error);
+      return rejectAxios(error);
     },
   );
 }

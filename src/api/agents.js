@@ -408,6 +408,7 @@ export async function fetchAgentFiles(
   }
   const { data } = await axios.get(`${baseUrl}/${agent_id}/files/`, {
     params,
+    skipGlobalErrorNotify: true,
   });
   return data;
 }
@@ -417,6 +418,7 @@ export async function fetchAgentFileProperties(agent_id, path, platform) {
   const { data } = await axios.get(`${baseUrl}/${agent_id}/files/properties/`, {
     params: { path: normalizedPath },
     timeout: 60_000,
+    skipGlobalErrorNotify: true,
   });
   return data;
 }
