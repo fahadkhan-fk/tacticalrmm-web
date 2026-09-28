@@ -32,9 +32,18 @@ export const FILE_TRANSFER_TRANSIENT_RETRY_BASE_MS = 500;
 export const FILE_TRANSFER_TRANSIENT_RETRY_MAX_MS = 4_000;
 export const FILE_TRANSFER_TRANSIENT_RETRY_MAX_DURATION_MS = 60_000;
 export const FILE_TRANSFER_TRANSIENT_RETRY_HARD_CAP = 40;
-export const FILE_TRANSFER_ACK_POLL_MS = 250;
+// A 408/204 means "not yet": the server answered, so the connection is fine.
+// Poll with backoff (50 ms doubling to 2 s): a short first step because the
+// agent usually delivers within ~100 ms on a fast link, the 2 s cap so a long
+// stall costs one request every 2 s. Give up on a stalled agent only after
+// the longer wait cap below.
+export const FILE_TRANSFER_ACK_POLL_MS = 50;
+export const FILE_TRANSFER_ACK_POLL_MAX_MS = 2_000;
+export const FILE_TRANSFER_ACK_WAIT_MAX_MS = 10 * 60 * 1000;
 export const TRANSFER_RECONNECTING_MESSAGE =
   "Connection interrupted — reconnecting…";
+export const DOWNLOAD_FILE_ACCESS_DENIED_MESSAGE =
+  "File access was not allowed. Click Resume and allow access to continue the download.";
 export const TRANSFER_CONNECTION_LOST_MESSAGE =
   "Connection lost. Click Resume to continue.";
 export const TRANSFER_TOOLTIP_CLEAR_FINISHED =

@@ -435,30 +435,98 @@ export interface DownloadBytesRecord {
   buffers: ArrayBuffer[];
   committedOffset: number;
   chunkSize: number;
+  chunksId?: string;
 }
 
-export async function idbPutDownloadBytes(
-  key: string,
-  record: DownloadBytesRecord,
+interface DownloadBytesMeta {
+  committedOffset: number;
+  chunkSize: number;
+  chunksId?: string;
+  chunkCount?: number;
+  buffers?: ArrayBuffer[];
+}
+
+function downloadChunkRange(
+  chunksId: string,
+  fromIndex = 0,
+  toIndex = Infinity,
+): IDBKeyRange {
+  return IDBKeyRange.bound(
+    ["chunk", chunksId, fromIndex],
+    ["chunk", chunksId, toIndex],
+  );
+}
+
+export function newDownloadChunksId(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+export async function idbWriteDownloadBytes(
+  keys: string[],
+  record: DownloadBytesRecord & { chunksId: string },
+  fromIndex: number,
 ): Promise<void> {
   const db = await openTransferIdb();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(FILE_TRANSFER_DOWNLOAD_BYTES_STORE, "readwrite");
-    tx.objectStore(FILE_TRANSFER_DOWNLOAD_BYTES_STORE).put(record, key);
+    const store = tx.objectStore(FILE_TRANSFER_DOWNLOAD_BYTES_STORE);
+    const { buffers, chunksId } = record;
+    store.delete(downloadChunkRange(chunksId, buffers.length));
+    for (let i = Math.max(0, fromIndex); i < buffers.length; i++) {
+      store.put(buffers[i], ["chunk", chunksId, i]);
+    }
+    const meta: DownloadBytesMeta = {
+      committedOffset: record.committedOffset,
+      chunkSize: record.chunkSize,
+      chunksId,
+      chunkCount: buffers.length,
+    };
+    for (const key of keys) {
+      store.put(meta, key);
+    }
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
   });
 }
 
 export async function idbGetDownloadBytes(
   key: string,
+  options: { withBuffers?: boolean } = {},
 ): Promise<DownloadBytesRecord | undefined> {
+  const withBuffers = options.withBuffers ?? true;
   const db = await openTransferIdb();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(FILE_TRANSFER_DOWNLOAD_BYTES_STORE, "readonly");
-    const request = tx.objectStore(FILE_TRANSFER_DOWNLOAD_BYTES_STORE).get(key);
-    request.onsuccess = () =>
-      resolve(request.result as DownloadBytesRecord | undefined);
+    const store = tx.objectStore(FILE_TRANSFER_DOWNLOAD_BYTES_STORE);
+    const request = store.get(key);
+    request.onsuccess = () => {
+      const meta = request.result as DownloadBytesMeta | undefined;
+      if (!meta) {
+        resolve(undefined);
+        return;
+      }
+      const base = {
+        committedOffset: meta.committedOffset,
+        chunkSize: meta.chunkSize,
+        chunksId: meta.chunksId,
+      };
+      if (!meta.chunksId || !withBuffers) {
+        resolve({ ...base, buffers: withBuffers ? meta.buffers || [] : [] });
+        return;
+      }
+      const count = meta.chunkCount ?? 0;
+      if (count < 1) {
+        resolve({ ...base, buffers: [] });
+        return;
+      }
+      const chunks = store.getAll(
+        downloadChunkRange(meta.chunksId, 0, count - 1),
+      );
+      chunks.onsuccess = () =>
+        resolve({ ...base, buffers: chunks.result as ArrayBuffer[] });
+      chunks.onerror = () => reject(chunks.error);
+    };
     request.onerror = () => reject(request.error);
   });
 }
@@ -467,7 +535,15 @@ export async function idbDeleteDownloadBytes(key: string): Promise<void> {
   const db = await openTransferIdb();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(FILE_TRANSFER_DOWNLOAD_BYTES_STORE, "readwrite");
-    tx.objectStore(FILE_TRANSFER_DOWNLOAD_BYTES_STORE).delete(key);
+    const store = tx.objectStore(FILE_TRANSFER_DOWNLOAD_BYTES_STORE);
+    const request = store.get(key);
+    request.onsuccess = () => {
+      const meta = request.result as DownloadBytesMeta | undefined;
+      if (meta?.chunksId) {
+        store.delete(downloadChunkRange(meta.chunksId));
+      }
+      store.delete(key);
+    };
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });

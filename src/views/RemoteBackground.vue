@@ -86,14 +86,12 @@
         <RegistryManager :agent_id="agent_id" />
       </q-tab-panel>
     </q-tab-panels>
-    <keep-alive>
-      <FileBrowserManager
-        v-if="fileBrowserDefaultsLoaded && fileBrowserMode === 'new'"
-        v-show="tab === 'filebrowser'"
-        :agent_id="agent_id"
-        :agent-platform="String($route.query.agentPlatform || 'windows')"
-      />
-    </keep-alive>
+    <FileBrowserManager
+      v-if="fileBrowserDefaultsLoaded && fileBrowserMode === 'new'"
+      v-show="tab === 'filebrowser'"
+      :agent_id="agent_id"
+      :agent-platform="String($route.query.agentPlatform || 'windows')"
+    />
     <iframe
       v-if="
         tab === 'filebrowser' &&

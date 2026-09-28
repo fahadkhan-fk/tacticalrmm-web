@@ -341,12 +341,13 @@ async function classifyDownloadRecovery(
     }
 
     const bytes =
-      (await idbGetDownloadBytes(
-        downloadBytesSessionKey(transfer.session_id),
-      )) ||
+      (await idbGetDownloadBytes(downloadBytesSessionKey(transfer.session_id), {
+        withBuffers: false,
+      })) ||
       (resumeScopeKey
         ? await idbGetDownloadBytes(
             downloadBytesPathKey(agentId, resumeScopeKey),
+            { withBuffers: false },
           )
         : undefined);
     if (bytes && bytes.committedOffset > 0) {
@@ -384,30 +385,53 @@ function downloadHandleKeyForQueueItem(
   return null;
 }
 
-export async function requestStoredDownloadHandle(
+type StoredDownloadHandleItem = {
+  sourcePath: string;
+  kind?: "file" | "archive";
+  archivePaths?: string[];
+  handleKey?: string;
+  sessionId?: string;
+};
+
+async function storedDownloadHandles(
   agentId: string,
-  item: {
-    sourcePath: string;
-    kind?: "file" | "archive";
-    archivePaths?: string[];
-    handleKey?: string;
-    sessionId?: string;
-  },
-): Promise<FileSystemFileHandle | null> {
+  item: StoredDownloadHandleItem,
+): Promise<FileSystemFileHandle[]> {
   const keys = [
     item.handleKey,
     item.sessionId ? downloadSessionHandleIdbKey(item.sessionId) : null,
     downloadHandleKeyForQueueItem(agentId, item),
   ];
   const seen = new Set<string>();
+  const handles: FileSystemFileHandle[] = [];
   for (const key of keys) {
     if (!key || seen.has(key)) continue;
     seen.add(key);
     const handle = await idbGetFileHandle(key);
-    if (!handle) continue;
+    if (handle) handles.push(handle);
+  }
+  return handles;
+}
+
+export async function requestStoredDownloadHandle(
+  agentId: string,
+  item: StoredDownloadHandleItem,
+): Promise<FileSystemFileHandle | null> {
+  for (const handle of await storedDownloadHandles(agentId, item)) {
     if (await requestFileHandlePermission(handle)) return handle;
   }
   return null;
+}
+
+export async function hasStoredDownloadHandle(
+  agentId: string,
+  item: StoredDownloadHandleItem,
+): Promise<boolean> {
+  try {
+    return (await storedDownloadHandles(agentId, item)).length > 0;
+  } catch {
+    return false;
+  }
 }
 
 export async function requestStoredDownloadHandlePermission(

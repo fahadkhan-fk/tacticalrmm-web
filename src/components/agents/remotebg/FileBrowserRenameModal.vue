@@ -53,6 +53,7 @@ const props = defineProps<{
   item: FileBrowserItem | null;
   existingNames: string[];
   saving?: boolean;
+  platform?: string;
 }>();
 
 const emit = defineEmits<{
@@ -66,7 +67,8 @@ const localName = ref("");
 const originalName = ref("");
 
 const nameRules = computed(() => [
-  (v: string | number | null | undefined) => nameSegmentBaseRule(v),
+  (v: string | number | null | undefined) =>
+    nameSegmentBaseRule(v, props.platform),
   (v: string | number | null | undefined) =>
     duplicateNameRule(v, props.existingNames, originalName.value),
 ]);

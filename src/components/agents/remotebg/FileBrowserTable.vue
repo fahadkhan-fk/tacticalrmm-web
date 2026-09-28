@@ -43,6 +43,9 @@
       :sort-method="sortFileBrowserRows"
       binary-state-sort
       :rows-per-page-options="[0]"
+      virtual-scroll
+      :virtual-scroll-item-size="FILE_BROWSER_ROW_HEIGHT_PX"
+      :virtual-scroll-sticky-size-start="FILE_BROWSER_HEADER_HEIGHT_PX"
       selection="multiple"
       v-model:selected="selected"
       :no-data-label="noDataLabel"
@@ -89,84 +92,8 @@
           :props="props"
           class="cursor-pointer file-table-row"
           @dblclick="emit('row-dblclick', props.row)"
+          @contextmenu.prevent="openRowMenu($event, props.row)"
         >
-          <q-menu
-            context-menu
-            transition-show="jump-up"
-            transition-hide="jump-down"
-          >
-            <q-list dense class="file-context-menu" style="min-width: 180px">
-              <q-item
-                v-if="props.row.type === 'folder'"
-                clickable
-                v-close-popup
-                @click="emit('open-folder', props.row)"
-              >
-                <q-item-section avatar>
-                  <q-icon name="folder_open" size="18px" />
-                </q-item-section>
-                <q-item-section>Open</q-item-section>
-              </q-item>
-
-              <q-item
-                clickable
-                v-close-popup
-                @click="emit('download', props.row)"
-              >
-                <q-item-section avatar>
-                  <q-icon name="download" size="18px" />
-                </q-item-section>
-                <q-item-section>Download</q-item-section>
-              </q-item>
-
-              <q-item
-                clickable
-                v-close-popup
-                @click="emit('rename', props.row)"
-              >
-                <q-item-section avatar>
-                  <q-icon name="edit" size="18px" />
-                </q-item-section>
-                <q-item-section>Rename</q-item-section>
-              </q-item>
-
-              <q-item
-                clickable
-                v-close-popup
-                @click="emit('delete', props.row)"
-              >
-                <q-item-section avatar>
-                  <q-icon name="delete" size="18px" color="negative" />
-                </q-item-section>
-                <q-item-section class="text-negative">Delete</q-item-section>
-              </q-item>
-
-              <q-separator />
-
-              <q-item
-                clickable
-                v-close-popup
-                @click="emit('properties', props.row)"
-              >
-                <q-item-section avatar>
-                  <q-icon name="info" size="18px" />
-                </q-item-section>
-                <q-item-section>Properties</q-item-section>
-              </q-item>
-
-              <q-item
-                clickable
-                v-close-popup
-                @click="emit('copy-path', props.row)"
-              >
-                <q-item-section avatar>
-                  <q-icon name="content_copy" size="18px" />
-                </q-item-section>
-                <q-item-section>Copy Path</q-item-section>
-              </q-item>
-            </q-list>
-          </q-menu>
-
           <q-td class="file-col-select">
             <q-checkbox v-model="props.selected" dense size="xs" />
           </q-td>
@@ -211,6 +138,75 @@
         </q-tr>
       </template>
     </q-table>
+
+    <!-- The menu anchors to this 1px element placed at the pointer. Anchored
+         to the table instead, clicks anywhere in the table would count as
+         "inside" and never close it. -->
+    <div
+      class="row-menu-anchor"
+      :style="{ left: `${menuPos.x}px`, top: `${menuPos.y}px` }"
+      aria-hidden="true"
+    >
+      <q-menu
+        ref="rowMenuRef"
+        no-parent-event
+        anchor="bottom left"
+        self="top left"
+        transition-show="jump-up"
+        transition-hide="jump-down"
+      >
+        <q-list dense class="file-context-menu" style="min-width: 180px">
+          <q-item
+            v-if="menuRow?.type === 'folder'"
+            clickable
+            v-close-popup
+            @click="emit('open-folder', menuRow!)"
+          >
+            <q-item-section avatar>
+              <q-icon name="folder_open" size="18px" />
+            </q-item-section>
+            <q-item-section>Open</q-item-section>
+          </q-item>
+
+          <q-item clickable v-close-popup @click="emit('download', menuRow!)">
+            <q-item-section avatar>
+              <q-icon name="download" size="18px" />
+            </q-item-section>
+            <q-item-section>Download</q-item-section>
+          </q-item>
+
+          <q-item clickable v-close-popup @click="emit('rename', menuRow!)">
+            <q-item-section avatar>
+              <q-icon name="edit" size="18px" />
+            </q-item-section>
+            <q-item-section>Rename</q-item-section>
+          </q-item>
+
+          <q-item clickable v-close-popup @click="emit('delete', menuRow!)">
+            <q-item-section avatar>
+              <q-icon name="delete" size="18px" color="negative" />
+            </q-item-section>
+            <q-item-section class="text-negative">Delete</q-item-section>
+          </q-item>
+
+          <q-separator />
+
+          <q-item clickable v-close-popup @click="emit('properties', menuRow!)">
+            <q-item-section avatar>
+              <q-icon name="info" size="18px" />
+            </q-item-section>
+            <q-item-section>Properties</q-item-section>
+          </q-item>
+
+          <q-item clickable v-close-popup @click="emit('copy-path', menuRow!)">
+            <q-item-section avatar>
+              <q-icon name="content_copy" size="18px" />
+            </q-item-section>
+            <q-item-section>Copy Path</q-item-section>
+          </q-item>
+        </q-list>
+      </q-menu>
+    </div>
 
     <div
       v-if="showEmptyState"
@@ -289,7 +285,7 @@ import {
   useModel,
   watch,
 } from "vue";
-import { useQuasar } from "quasar";
+import { QMenu, useQuasar } from "quasar";
 
 import { fileBrowserTableColumns } from "@/utils/filebrowserColumns";
 import {
@@ -418,6 +414,24 @@ const selected = useModel(props, "selected");
 const columns = fileBrowserTableColumns;
 
 const tableRef = ref<FileBrowserTableRoot | null>(null);
+
+// One context menu for the whole table (a QMenu per row is costly on large
+// folders); it opens at the pointer for the row that was right-clicked.
+const rowMenuRef = ref<QMenu | null>(null);
+const menuRow = ref<FileBrowserItem | null>(null);
+const menuPos = ref({ x: 0, y: 0 });
+
+function openRowMenu(evt: MouseEvent, row: FileBrowserItem) {
+  const menu = rowMenuRef.value;
+  if (!menu) return;
+  menu.hide();
+  menuPos.value = { x: evt.clientX, y: evt.clientY };
+  // Show after the anchor has moved so the menu is placed at the pointer.
+  void nextTick(() => {
+    menuRow.value = row;
+    menu.show();
+  });
+}
 let tableScrollEl: HTMLElement | null = null;
 
 function getTableRootEl(): HTMLElement | null {
@@ -917,6 +931,13 @@ onBeforeUnmount(() => {
 
 .file-table-wrap--dark :deep(.file-browser-table .q-table__bottom) {
   color: rgba(255, 255, 255, 0.7);
+}
+
+.row-menu-anchor {
+  position: fixed;
+  width: 1px;
+  height: 1px;
+  pointer-events: none;
 }
 
 .file-context-menu .q-item__section--avatar {

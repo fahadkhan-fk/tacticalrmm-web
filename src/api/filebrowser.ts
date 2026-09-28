@@ -1,5 +1,7 @@
 import axios from "axios";
 
+import { TransferNotReadyError } from "@/services/fileTransfer/sessionLimit";
+
 import {
   FILE_TRANSFER_COMPLETE_TIMEOUT_MS,
   FILE_TRANSFER_DOWNLOAD_CHUNK_TIMEOUT_MS,
@@ -240,6 +242,11 @@ export async function getAgentFileDownloadChunk(
       ...transferRequestConfig,
     },
   );
+  if (response.status === 204) {
+    throw new TransferNotReadyError(
+      "Timed out waiting for agent to push chunk",
+    );
+  }
   const contentRange =
     (response.headers["content-range"] as string | undefined) ??
     (response.headers["Content-Range"] as string | undefined) ??

@@ -143,6 +143,7 @@
       v-model="newFolderDialog"
       :existing-names="rowNames"
       :saving="mutationSaving"
+      :platform="agentPlatform"
       @save="confirmNewFolder"
     />
 
@@ -151,6 +152,7 @@
       :item="renameTargetItem"
       :existing-names="rowNames"
       :saving="mutationSaving"
+      :platform="agentPlatform"
       @save="confirmRename"
       @hide="renameTargetItem = null"
     />
@@ -170,11 +172,10 @@
 <script setup lang="ts">
 import {
   computed,
-  onActivated,
   onBeforeUnmount,
-  onDeactivated,
   onMounted,
   ref,
+  shallowRef,
   toRef,
   watch,
 } from "vue";
@@ -221,6 +222,7 @@ import {
 } from "@/constants/filebrowser";
 import {
   FILE_TRANSFER_DEFAULT_CHUNK_SIZE,
+  DOWNLOAD_FILE_ACCESS_DENIED_MESSAGE,
   TRANSFER_CONNECTION_LOST_MESSAGE,
   TRANSFER_RECONNECTING_MESSAGE,
   TRANSFER_SLOT_WAIT_MESSAGE,
@@ -258,14 +260,18 @@ import {
   clearDownloadResumeBySessionId,
   clearUploadResume,
   clearUploadResumeBySessionId,
+  downloadBytesPathKey,
+  downloadBytesSessionKey,
   downloadHandleIdbKey,
   downloadSessionHandleIdbKey,
+  idbDeleteDownloadBytes,
   isAbortError,
   loadDownloadResume,
   loadUploadResume,
   persistDownloadFileHandle,
   pickDownloadSaveHandle,
   pickExistingDownloadHandle,
+  removeFileSystemFileHandle,
 } from "@/services/fileTransfer/resume";
 import {
   clearTransferPersistence,
@@ -274,6 +280,7 @@ import {
   persistDownloadQueueMeta,
   persistUploadQueueMeta,
   reconcileResumableTransfers,
+  hasStoredDownloadHandle,
   requestStoredDownloadHandle,
 } from "@/services/fileTransfer/transferQueuePersist";
 import { isRetryableTransferError } from "@/services/fileTransfer/sessionLimit";
@@ -485,7 +492,9 @@ const transfersIndicatorLabel = computed(() => {
   return "Transfers";
 });
 
-const rows = ref<FileBrowserItem[]>([]);
+// Replaced wholesale on every load; shallow so thousands of rows are not
+// made deeply reactive.
+const rows = shallowRef<FileBrowserItem[]>([]);
 
 const rowNames = computed(() => rows.value.map((r) => r.name));
 
@@ -781,21 +790,23 @@ function stopOwnershipRefreshTimer(): void {
   ownershipRefreshTimer = null;
 }
 
-function persistQueuesAsPaused(): void {
+function persistQueuesAsPaused(agentId: string = props.agent_id): void {
   for (const item of downloadQueue.value) {
     if (isDownloadQueueItemTerminal(item.status)) continue;
-    void persistDownloadQueueMeta(props.agent_id, item);
+    void persistDownloadQueueMeta(agentId, item);
   }
   for (const item of uploadQueue.value) {
     if (isUploadQueueItemTerminal(item.status)) continue;
-    void persistUploadQueueMeta(props.agent_id, item);
+    void persistUploadQueueMeta(agentId, item);
   }
 }
 
-function pauseInFlightTransfersForUnload(): void {
+function pauseInFlightTransfersForUnload(
+  agentId: string = props.agent_id,
+): void {
   pauseAllDownloads();
   pauseAllUploads();
-  persistQueuesAsPaused();
+  persistQueuesAsPaused(agentId);
 }
 
 function onPageHidePause(): void {
@@ -832,16 +843,6 @@ onMounted(() => {
   window.addEventListener("pagehide", onPageHidePause);
 });
 
-onActivated(() => {
-  startOwnershipRefreshTimer();
-  attachFindShortcut();
-});
-
-onDeactivated(() => {
-  detachFindShortcut();
-  stopOwnershipRefreshTimer();
-});
-
 onBeforeUnmount(() => {
   pauseInFlightTransfersForUnload();
   cancelFilterDebounce();
@@ -855,8 +856,9 @@ onBeforeUnmount(() => {
 
 watch(
   () => [props.agent_id, props.agentPlatform] as const,
-  () => {
-    pauseInFlightTransfersForUnload();
+  (_next, [previousAgentId]) => {
+    // The queues still belong to the previous agent; save them under its id.
+    pauseInFlightTransfersForUnload(previousAgentId);
     const seq = ++restoreSeq;
     clearFolderFilter();
     initializeRootPath();
@@ -2216,6 +2218,23 @@ async function discardPausedDownload(item: DownloadQueueItem): Promise<void> {
 
   const saved = loadDownloadResume(props.agent_id, resumeScopeKey);
   const sessionId = item.sessionId || saved?.sessionId;
+
+  // Remove what was already written: the partial file (while the Cancel
+  // click still counts as a gesture for the permission prompt) and any
+  // in-memory bytes kept for resume.
+  const handle = await requestStoredDownloadHandle(props.agent_id, {
+    ...item,
+    sessionId,
+  }).catch(() => null);
+  if (handle) {
+    await removeFileSystemFileHandle(handle);
+  }
+  const bytesKeys = [downloadBytesPathKey(props.agent_id, resumeScopeKey)];
+  if (sessionId) bytesKeys.push(downloadBytesSessionKey(sessionId));
+  for (const key of bytesKeys) {
+    await idbDeleteDownloadBytes(key).catch(() => {});
+  }
+
   broadcastCancelForItem({ id: item.id, sessionId });
   releaseDownloadClaim(item.id, "cancel");
   if (sessionId) {
@@ -2251,6 +2270,14 @@ async function resumeDownloadItem(id: string) {
     return;
   }
   let handle = await requestStoredDownloadHandle(props.agent_id, item);
+  if (!handle && (await hasStoredDownloadHandle(props.agent_id, item))) {
+    // Access to the partial file was denied. Starting over in memory would
+    // throw away the bytes on disk (and fail above the in-memory limit).
+    item.recoveryHint = "needs_permission";
+    item.errorMessage = DOWNLOAD_FILE_ACCESS_DENIED_MESSAGE;
+    notifyWarning(DOWNLOAD_FILE_ACCESS_DENIED_MESSAGE);
+    return;
+  }
   if (
     !handle &&
     item.recoveryHint === "needs_destination" &&
@@ -2581,10 +2608,12 @@ async function queueFilesForUpload(
   }
 
   const skippedInvalidNameFiles = batch.filter(
-    (f) => nameSegmentBaseRule(f.name) !== true,
+    (f) => nameSegmentBaseRule(f.name, agentPlatform.value) !== true,
   );
   const skippedInvalidName = skippedInvalidNameFiles.length;
-  const namedOk = batch.filter((f) => nameSegmentBaseRule(f.name) === true);
+  const namedOk = batch.filter(
+    (f) => nameSegmentBaseRule(f.name, agentPlatform.value) === true,
+  );
 
   const maxFileBytes = MAX_UPLOAD_FILE_SIZE_BYTES;
   const skippedOversized =
@@ -2595,7 +2624,10 @@ async function queueFilesForUpload(
   const skippedDueToQueue = sizeOk.length - toEnqueue.length;
 
   if (skippedInvalidName > 0) {
-    const reason = nameSegmentBaseRule(skippedInvalidNameFiles[0].name);
+    const reason = nameSegmentBaseRule(
+      skippedInvalidNameFiles[0].name,
+      agentPlatform.value,
+    );
     notes.push(
       `${skippedInvalidName} file(s) skipped — ${
         typeof reason === "string" ? reason : "invalid filename"

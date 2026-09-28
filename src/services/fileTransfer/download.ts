@@ -24,7 +24,12 @@ import type {
 } from "@/types/fileTransfer";
 import { fileBrowserPathLeaf } from "@/utils/filebrowser";
 
-import { createSha256Hasher, hashBlobPrefix, hashBytes } from "./hash";
+import {
+  createSha256Hasher,
+  hashBlobPrefix,
+  hashBytes,
+  type Sha256Hasher,
+} from "./hash";
 import { writeDownloadChunkThenAck } from "./downloadChunkCommit";
 import {
   archiveDownloadHandleIdbKey,
@@ -42,14 +47,16 @@ import {
   idbDeleteFileHandle,
   idbGetDownloadBytes,
   idbGetFileHandle,
-  idbPutDownloadBytes,
   idbPutFileHandle,
+  idbWriteDownloadBytes,
   isAbortError,
   loadDownloadResume,
+  newDownloadChunksId,
   saveDownloadResume,
 } from "./resume";
 import {
   RetryableTransferError,
+  TransferNotReadyError,
   type TransferSlotWaitInfo,
   type TransientRetryInfo,
   isRetryableTransferError,
@@ -77,7 +84,7 @@ interface DownloadSink {
   hashPrefix(
     endOffset: number,
     chunkSize: number,
-    hasher: ReturnType<typeof createSha256Hasher>,
+    hasher: Sha256Hasher,
   ): Promise<void>;
   resetForNewSession(): Promise<void>;
   bindSession?(sessionId: string): Promise<void>;
@@ -228,13 +235,17 @@ function rethrowSavePickerError(
   throw new Error(SAVE_PICKER_UNAVAILABLE_MESSAGE);
 }
 
+const DOWNLOAD_CHUNKS_IN_FLIGHT = 2;
+const DOWNLOAD_AHEAD_BACKOFF_CHUNKS = 4;
+
 interface StreamDownloadChunksParams {
   agentId: string;
   sessionId: string;
   totalSize: number;
+  chunkSize: number;
   startOffset: number;
   sink: DownloadSink;
-  hasher: ReturnType<typeof createSha256Hasher>;
+  hasher: Sha256Hasher;
   signal?: AbortSignal;
   onProgress?: (progress: FileTransferProgress) => void;
   onRetrying?: (info: TransientRetryInfo) => void;
@@ -247,6 +258,7 @@ async function streamDownloadChunks(
     agentId,
     sessionId,
     totalSize,
+    chunkSize,
     sink,
     hasher,
     signal,
@@ -255,20 +267,26 @@ async function streamDownloadChunks(
   } = params;
   let committedOffset = params.startOffset;
 
-  while (committedOffset < totalSize) {
-    if (signal?.aborted) {
-      throw new DOMException("Download aborted", "AbortError");
-    }
+  const prefetchAbort = new AbortController();
+  const onOuterAbort = () => prefetchAbort.abort();
+  signal?.addEventListener("abort", onOuterAbort, { once: true });
 
-    const offset = committedOffset;
-    const { data: chunkBuf, newCommitted } = await withTransientRetry(
+  const fetchChunk = (offset: number, poll: boolean) =>
+    withTransientRetry(
       async () => {
-        const { data, contentRange } = await getAgentFileDownloadChunk(
-          agentId,
-          sessionId,
-          offset,
-          signal,
-        );
+        let response;
+        try {
+          response = await getAgentFileDownloadChunk(
+            agentId,
+            sessionId,
+            offset,
+            prefetchAbort.signal,
+          );
+        } catch (err) {
+          if (!poll && err instanceof TransferNotReadyError) return null;
+          throw err;
+        }
+        const { data, contentRange } = response;
         const range = parseContentRangeHeader(contentRange);
         assertDownloadChunkRange(range, {
           start: offset,
@@ -282,26 +300,71 @@ async function streamDownloadChunks(
         }
         return { data, newCommitted: range.end + 1 };
       },
-      { signal, onRetry: onRetrying },
+      { signal: prefetchAbort.signal, onRetry: onRetrying },
     );
 
-    await writeDownloadChunkThenAck({
-      chunk: chunkBuf,
-      writeChunk: (buf) => sink.writeChunk(buf),
-      afterWrite: () => hashBytes(hasher, chunkBuf),
-      ack: () =>
-        withTransientRetry(
-          () => ackAgentFileDownloadChunk(agentId, sessionId, newCommitted),
-          { signal, onRetry: onRetrying },
-        ),
-    });
-    committedOffset = newCommitted;
+  type PendingChunk = {
+    offset: number;
+    result: ReturnType<typeof fetchChunk>;
+  };
+  let queue: PendingChunk[] = [];
+  let nextRequestOffset = committedOffset;
+  let singleAheadFor = 0;
+  const topUp = () => {
+    const limit = singleAheadFor > 0 ? 1 : DOWNLOAD_CHUNKS_IN_FLIGHT;
+    while (queue.length < limit && nextRequestOffset < totalSize) {
+      const result = fetchChunk(nextRequestOffset, queue.length === 0);
+      result.catch(() => {});
+      queue.push({ offset: nextRequestOffset, result });
+      nextRequestOffset = Math.min(nextRequestOffset + chunkSize, totalSize);
+    }
+  };
 
-    onProgress?.({
-      acceptedOffset: committedOffset,
-      committedOffset,
-      totalSize,
-    });
+  try {
+    while (committedOffset < totalSize) {
+      if (signal?.aborted) {
+        throw new DOMException("Download aborted", "AbortError");
+      }
+
+      topUp();
+      const pending = queue.shift()!;
+      let fetched = await pending.result;
+      if (singleAheadFor > 0) singleAheadFor -= 1;
+      if (!fetched) {
+        singleAheadFor = DOWNLOAD_AHEAD_BACKOFF_CHUNKS;
+        fetched = await fetchChunk(pending.offset, true);
+      }
+      if (!fetched) {
+        throw new RetryableTransferError("Download chunk was not received");
+      }
+      const { data: chunkBuf, newCommitted } = fetched;
+      if (queue.length && queue[0].offset !== newCommitted) {
+        queue = [];
+        nextRequestOffset = newCommitted;
+      }
+      topUp();
+
+      await writeDownloadChunkThenAck({
+        chunk: chunkBuf,
+        writeChunk: (buf) => sink.writeChunk(buf),
+        afterWrite: () => hashBytes(hasher, chunkBuf),
+        ack: () =>
+          withTransientRetry(
+            () => ackAgentFileDownloadChunk(agentId, sessionId, newCommitted),
+            { signal, onRetry: onRetrying },
+          ),
+      });
+      committedOffset = newCommitted;
+
+      onProgress?.({
+        acceptedOffset: committedOffset,
+        committedOffset,
+        totalSize,
+      });
+    }
+  } finally {
+    prefetchAbort.abort();
+    signal?.removeEventListener("abort", onOuterAbort);
   }
 }
 
@@ -430,19 +493,38 @@ async function createDownloadSink(
       buffers = stored?.buffers || [];
     }
 
+    const chunksId = stored?.chunksId || newDownloadChunksId();
+    let dirtyFrom = 0;
+    let persistDisabled = false;
+
     async function persistIdbBytes(): Promise<void> {
-      if (!buffers) return;
+      if (!buffers || persistDisabled) return;
       const committedOffset = buffers.reduce(
         (sum, part) => sum + part.byteLength,
         0,
       );
-      const record = {
-        buffers,
-        committedOffset,
-        chunkSize: saved?.chunkSize || FILE_TRANSFER_DEFAULT_CHUNK_SIZE,
-      };
-      for (const key of persistKeys) {
-        await idbPutDownloadBytes(key, record);
+      try {
+        await idbWriteDownloadBytes(
+          persistKeys,
+          {
+            buffers,
+            committedOffset,
+            chunkSize: saved?.chunkSize || FILE_TRANSFER_DEFAULT_CHUNK_SIZE,
+            chunksId,
+          },
+          dirtyFrom,
+        );
+        dirtyFrom = buffers.length;
+      } catch (err) {
+        persistDisabled = true;
+        console.warn(
+          "Download resume copy could not be stored; continuing without resume after reload.",
+          err,
+        );
+        // A partial copy would resume from the wrong offset.
+        for (const key of persistKeys) {
+          await idbDeleteDownloadBytes(key).catch(() => {});
+        }
       }
     }
 
@@ -468,6 +550,7 @@ async function createDownloadSink(
         },
         async resetForNewSession() {
           buffers = [];
+          dirtyFrom = 0;
           await persistIdbBytes();
         },
         async bindSession(sessionId: string) {
@@ -613,6 +696,7 @@ export async function runFileDownloadTransfer(
   let effectiveResumeOffset = resumeOffset;
   let sessionId: string | null = null;
   let staleSessionId: string | null = abandonedSessionId;
+  let hasher: Sha256Hasher | null = null;
 
   try {
     if (resumeSessionId) {
@@ -679,7 +763,7 @@ export async function runFileDownloadTransfer(
       ).catch(() => {});
     }
 
-    const hasher = createSha256Hasher();
+    hasher = createSha256Hasher();
     if (committedOffset > 0) {
       await sink.hashPrefix(committedOffset, chunkSize, hasher);
       onProgress?.({
@@ -695,6 +779,7 @@ export async function runFileDownloadTransfer(
       agentId,
       sessionId: sessionIdValue,
       totalSize,
+      chunkSize,
       startOffset: committedOffset,
       sink,
       hasher,
@@ -709,7 +794,7 @@ export async function runFileDownloadTransfer(
       { signal, onRetry: onRetrying },
     );
 
-    const localSha256 = hasher.hex();
+    const localSha256 = await hasher.hex();
     const agentSha = (completeData.sha256 || "").toLowerCase();
     const integrityOk = !agentSha || agentSha === localSha256;
 
@@ -732,6 +817,7 @@ export async function runFileDownloadTransfer(
       bytesWritten: totalSize,
     };
   } catch (err) {
+    hasher?.dispose();
     await abortDownloadSink(sink, err, abortIntent);
     if (isAbortError(err)) {
       if (abortIntent?.mode === "cancel") {
@@ -845,6 +931,7 @@ export async function runArchiveDownloadTransfer(
 
   let effectiveResumeOffset = resumeOffset;
   let staleSessionId: string | null = abandonedSessionId;
+  let hasher: Sha256Hasher | null = null;
 
   try {
     if (resumeSessionId) {
@@ -939,7 +1026,7 @@ export async function runArchiveDownloadTransfer(
       ).catch(() => {});
     }
 
-    const hasher = createSha256Hasher();
+    hasher = createSha256Hasher();
     if (committedOffset > 0) {
       await sink.hashPrefix(committedOffset, chunkSize, hasher);
       onProgress?.({
@@ -955,6 +1042,7 @@ export async function runArchiveDownloadTransfer(
       agentId,
       sessionId: sessionIdValue,
       totalSize,
+      chunkSize,
       startOffset: committedOffset,
       sink,
       hasher,
@@ -969,7 +1057,7 @@ export async function runArchiveDownloadTransfer(
       { signal, onRetry: onRetrying },
     );
 
-    const localSha256 = hasher.hex();
+    const localSha256 = await hasher.hex();
     const agentSha = (completeData.sha256 || "").toLowerCase();
     const integrityOk = !agentSha || agentSha === localSha256;
 
@@ -993,6 +1081,7 @@ export async function runArchiveDownloadTransfer(
       warnings: warnings.length > 0 ? warnings : undefined,
     };
   } catch (err) {
+    hasher?.dispose();
     await abortDownloadSink(sink, err, abortIntent);
     if (isAbortError(err)) {
       if (abortIntent?.mode === "cancel") {

@@ -7,9 +7,9 @@ import {
   uploadAgentFileChunk,
 } from "@/api/filebrowser";
 import {
-  FILE_TRANSFER_ACK_POLL_MS,
+  FILE_TRANSFER_ACK_WAIT_MAX_MS,
   FILE_TRANSFER_DEFAULT_CHUNK_SIZE,
-  FILE_TRANSFER_TRANSIENT_RETRY_MAX_DURATION_MS,
+  FILE_TRANSFER_TRANSIENT_RETRY_HARD_CAP,
 } from "@/constants/fileTransfer";
 import type {
   FileTransferProgress,
@@ -19,12 +19,7 @@ import type {
   TransferAbortIntent,
 } from "@/types/fileTransfer";
 
-import {
-  createSha256Hasher,
-  hashBytes,
-  hashFilePrefix,
-  type Sha256Hasher,
-} from "./hash";
+import { createSha256Hasher, hashFilePrefix, type Sha256Hasher } from "./hash";
 import {
   clearUploadResume,
   isAbortError,
@@ -35,6 +30,7 @@ import {
   type TransferSlotWaitInfo,
   type TransientRetryInfo,
   RetryableTransferError,
+  ackPollDelayMs,
   isRetryableTransferError,
   isTransferAckWaitError,
   sleepAbortable,
@@ -81,11 +77,8 @@ async function hashFileRange(
   blockSize: number,
   hasher: Sha256Hasher,
 ): Promise<void> {
-  let pos = start;
-  while (pos < end) {
-    const slice = file.slice(pos, Math.min(pos + blockSize, end));
-    hashBytes(hasher, await slice.arrayBuffer());
-    pos += slice.size;
+  if (end > start) {
+    hasher.updateBlob(file.slice(start, end), blockSize);
   }
 }
 
@@ -100,6 +93,7 @@ async function waitForUploadPipelineSlot(
 ): Promise<FileTransferUploadChunkReadyResponse> {
   const { signal, onRetry } = options;
   const started = Date.now();
+  let polls = 0;
   for (;;) {
     if (signal?.aborted) {
       throw new DOMException("Upload aborted", "AbortError");
@@ -121,12 +115,42 @@ async function waitForUploadPipelineSlot(
     if (ready.accepted_offset > offset || ready.can_put) {
       return ready;
     }
-    if (Date.now() - started >= FILE_TRANSFER_TRANSIENT_RETRY_MAX_DURATION_MS) {
+    if (Date.now() - started >= FILE_TRANSFER_ACK_WAIT_MAX_MS) {
       throw new RetryableTransferError(
         "Timed out waiting for agent to commit previous chunk",
       );
     }
-    await sleepAbortable(FILE_TRANSFER_ACK_POLL_MS, signal);
+    polls += 1;
+    await sleepAbortable(ackPollDelayMs(polls), signal);
+  }
+}
+
+async function waitForUploadCommitted(
+  agentId: string,
+  sessionId: string,
+  totalSize: number,
+  options: {
+    signal?: AbortSignal;
+    onRetry?: (info: TransientRetryInfo) => void;
+  } = {},
+): Promise<void> {
+  const { signal, onRetry } = options;
+  const started = Date.now();
+  let polls = 0;
+  for (;;) {
+    const ready = await withTransientRetry(
+      () => getUploadChunkReady(agentId, sessionId, signal),
+      { signal, onRetry },
+    );
+    if (
+      ready.committed_offset >= totalSize ||
+      UPLOAD_TERMINAL_STATUSES.has(ready.status)
+    ) {
+      return;
+    }
+    if (Date.now() - started >= FILE_TRANSFER_ACK_WAIT_MAX_MS) return;
+    polls += 1;
+    await sleepAbortable(ackPollDelayMs(polls), signal);
   }
 }
 
@@ -199,8 +223,9 @@ export async function runFileUploadTransfer(
   const chunkSize = initData.chunk_size;
   let offset = initData.committed_offset || 0;
 
+  let hasher: Sha256Hasher | null = null;
   try {
-    const hasher = createSha256Hasher();
+    hasher = createSha256Hasher();
     if (offset > 0) {
       await hashFilePrefix(file, offset, chunkSize, hasher);
       onProgress?.({
@@ -210,38 +235,49 @@ export async function runFileUploadTransfer(
       });
     }
 
+    let pipelineHasRoom = false;
     while (offset < totalSize) {
       if (signal?.aborted) {
         throw new DOMException("Upload aborted", "AbortError");
       }
 
-      const ready = await waitForUploadPipelineSlot(
-        agentId,
-        sessionId,
-        offset,
-        {
-          signal,
-          onRetry: onRetrying,
-        },
-      );
-      if (ready.accepted_offset > offset) {
-        const skipTo = Math.min(ready.accepted_offset, totalSize);
-        await hashFileRange(file, offset, skipTo, chunkSize, hasher);
-        offset = skipTo;
-        onProgress?.({
-          acceptedOffset: ready.accepted_offset,
-          committedOffset: ready.committed_offset,
-          totalSize,
-        });
-        continue;
+      if (!pipelineHasRoom) {
+        const ready = await waitForUploadPipelineSlot(
+          agentId,
+          sessionId,
+          offset,
+          {
+            signal,
+            onRetry: onRetrying,
+          },
+        );
+        if (ready.accepted_offset > offset) {
+          const skipTo = Math.min(ready.accepted_offset, totalSize);
+          await hashFileRange(file, offset, skipTo, chunkSize, hasher);
+          offset = skipTo;
+          onProgress?.({
+            acceptedOffset: ready.accepted_offset,
+            committedOffset: ready.committed_offset,
+            totalSize,
+          });
+          continue;
+        }
       }
+      pipelineHasRoom = false;
 
       const blob = file.slice(offset, offset + chunkSize);
       const end = offset + blob.size - 1;
-      hashBytes(hasher, await blob.arrayBuffer());
+      hasher.updateBlob(blob);
 
       let chunkRes: FileTransferUploadChunkResponse | null = null;
+      let putAttempts = 0;
       while (chunkRes === null) {
+        putAttempts += 1;
+        if (putAttempts > FILE_TRANSFER_TRANSIENT_RETRY_HARD_CAP) {
+          throw new RetryableTransferError(
+            "Timed out waiting for agent to commit previous chunk",
+          );
+        }
         try {
           chunkRes = await withTransientRetry(
             () =>
@@ -284,6 +320,7 @@ export async function runFileUploadTransfer(
       }
 
       offset = chunkRes.accepted_offset;
+      pipelineHasRoom = chunkRes.can_put === true;
       onProgress?.({
         acceptedOffset: chunkRes.accepted_offset,
         committedOffset: chunkRes.committed_offset,
@@ -291,7 +328,11 @@ export async function runFileUploadTransfer(
       });
     }
 
-    const fileSha256 = hasher.hex();
+    const fileSha256 = await hasher.hex();
+    await waitForUploadCommitted(agentId, sessionId, totalSize, {
+      signal,
+      onRetry: onRetrying,
+    });
     const completeData = await withTransientRetry(
       () => completeAgentFileUpload(agentId, sessionId, fileSha256, signal),
       { signal, onRetry: onRetrying },
@@ -308,6 +349,7 @@ export async function runFileUploadTransfer(
       integrityOk,
     };
   } catch (err) {
+    hasher?.dispose();
     if (isAbortError(err)) {
       if (abortIntent?.mode === "cancel") {
         await releaseUploadSession(agentId, sessionId, "user");

@@ -52,6 +52,7 @@ const props = defineProps<{
   modelValue: boolean;
   existingNames: string[];
   saving?: boolean;
+  platform?: string;
 }>();
 
 const emit = defineEmits<{
@@ -64,7 +65,8 @@ const nameInputRef = ref<InstanceType<typeof QInput> | null>(null);
 const localName = ref("");
 
 const nameRules = computed(() => [
-  (v: string | number | null | undefined) => nameSegmentBaseRule(v),
+  (v: string | number | null | undefined) =>
+    nameSegmentBaseRule(v, props.platform),
   (v: string | number | null | undefined) =>
     duplicateNameRule(v, props.existingNames),
 ]);

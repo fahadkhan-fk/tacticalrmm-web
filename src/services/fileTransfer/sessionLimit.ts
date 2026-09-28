@@ -1,7 +1,9 @@
 import { AxiosError } from "axios";
 
 import {
+  FILE_TRANSFER_ACK_POLL_MAX_MS,
   FILE_TRANSFER_ACK_POLL_MS,
+  FILE_TRANSFER_ACK_WAIT_MAX_MS,
   FILE_TRANSFER_SLOT_RETRY_BASE_MS,
   FILE_TRANSFER_SLOT_RETRY_MAX_ATTEMPTS,
   FILE_TRANSFER_SLOT_RETRY_MAX_DURATION_MS,
@@ -125,6 +127,13 @@ export class RetryableTransferError extends Error {
   }
 }
 
+export class TransferNotReadyError extends RetryableTransferError {
+  constructor(message: string) {
+    super(message);
+    this.name = "TransferNotReadyError";
+  }
+}
+
 function isAbortLikeError(err: unknown): boolean {
   if (err instanceof DOMException && err.name === "AbortError") return true;
   if (err instanceof AxiosError) {
@@ -169,11 +178,20 @@ export function isRetryableTransferError(err: unknown): boolean {
 }
 
 export function isTransferAckWaitError(err: unknown): boolean {
+  if (err instanceof TransferNotReadyError) return true;
   if (!(err instanceof AxiosError) || err.response?.status !== 408) {
     return false;
   }
   const detail = getAxiosErrorDetail(err);
   return /timed out waiting for agent to /i.test(detail || "");
+}
+
+export function ackPollDelayMs(attempt: number): number {
+  const n = Math.max(1, Math.floor(attempt));
+  return Math.min(
+    FILE_TRANSFER_ACK_POLL_MAX_MS,
+    FILE_TRANSFER_ACK_POLL_MS * 2 ** (n - 1),
+  );
 }
 
 export interface TransientRetryInfo {
@@ -207,6 +225,8 @@ export async function withTransientRetry<T>(
   } = options;
   let attempt = 0;
   let firstFailureAt: number | null = null;
+  let ackWaitStartedAt: number | null = null;
+  let ackPolls = 0;
 
   for (;;) {
     if (signal?.aborted) {
@@ -218,20 +238,28 @@ export async function withTransientRetry<T>(
       if (!isRetryable(err)) {
         throw err;
       }
-      if (firstFailureAt === null) {
-        firstFailureAt = Date.now();
-      }
-      const retryWindowExpired = Date.now() - firstFailureAt >= maxDurationMs;
       if (isTransferAckWaitError(err)) {
-        if (retryWindowExpired) {
+        firstFailureAt = null;
+        attempt = 0;
+        if (ackWaitStartedAt === null) {
+          ackWaitStartedAt = Date.now();
+        }
+        if (Date.now() - ackWaitStartedAt >= FILE_TRANSFER_ACK_WAIT_MAX_MS) {
           throw err;
         }
         if (signal?.aborted) {
           throw abortError();
         }
-        await sleepAbortable(FILE_TRANSFER_ACK_POLL_MS, signal);
+        ackPolls += 1;
+        await sleepAbortable(ackPollDelayMs(ackPolls), signal);
         continue;
       }
+      ackWaitStartedAt = null;
+      ackPolls = 0;
+      if (firstFailureAt === null) {
+        firstFailureAt = Date.now();
+      }
+      const retryWindowExpired = Date.now() - firstFailureAt >= maxDurationMs;
       attempt += 1;
       if (
         attempt >= FILE_TRANSFER_TRANSIENT_RETRY_HARD_CAP ||

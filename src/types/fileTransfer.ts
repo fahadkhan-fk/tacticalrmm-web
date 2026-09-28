@@ -14,6 +14,7 @@ export interface FileTransferUploadChunkResponse {
   chunk_start: number;
   chunk_end: number;
   chunk_bytes: number;
+  can_put?: boolean;
 }
 
 export interface FileTransferUploadChunkReadyResponse {

@@ -1001,10 +1001,12 @@ export function deriveArchiveDownloadName(items: FileBrowserItem[]): string {
 
 export function nameSegmentBaseRule(
   v: string | number | null | undefined,
+  platform?: string,
 ): true | string {
   const raw = String(v ?? "");
   if (!raw.trim()) return "Name is required";
-  if (raw.endsWith(".") || raw.endsWith(" ")) {
+  const windows = !platform || platform === "windows";
+  if (windows && (raw.endsWith(".") || raw.endsWith(" "))) {
     return "Name cannot end with a space or a period";
   }
 
