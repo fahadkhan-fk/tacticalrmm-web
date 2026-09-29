@@ -93,6 +93,9 @@
           class="cursor-pointer file-table-row"
           @dblclick="emit('row-dblclick', props.row)"
           @contextmenu.prevent="openRowMenu($event, props.row)"
+          v-touch-hold="
+            (details: TouchHoldDetails) => onRowTouchHold(details, props.row)
+          "
         >
           <q-td class="file-col-select">
             <q-checkbox v-model="props.selected" dense size="xs" />
@@ -285,7 +288,7 @@ import {
   useModel,
   watch,
 } from "vue";
-import { QMenu, useQuasar } from "quasar";
+import { QMenu, TouchHold, useQuasar } from "quasar";
 
 import { fileBrowserTableColumns } from "@/utils/filebrowserColumns";
 import {
@@ -421,11 +424,29 @@ const rowMenuRef = ref<QMenu | null>(null);
 const menuRow = ref<FileBrowserItem | null>(null);
 const menuPos = ref({ x: 0, y: 0 });
 
+// iOS Safari doesn't fire contextmenu on long press
+const vTouchHold = TouchHold;
+type TouchHoldDetails = { position: { top: number; left: number } };
+let lastRowMenuOpen = { row: null as FileBrowserItem | null, at: 0 };
+
 function openRowMenu(evt: MouseEvent, row: FileBrowserItem) {
+  showRowMenuAt(evt.clientX, evt.clientY, row);
+}
+
+function onRowTouchHold(details: TouchHoldDetails, row: FileBrowserItem) {
+  // Android already opened it via contextmenu
+  if (lastRowMenuOpen.row === row && Date.now() - lastRowMenuOpen.at < 1000) {
+    return;
+  }
+  showRowMenuAt(details.position.left, details.position.top, row);
+}
+
+function showRowMenuAt(x: number, y: number, row: FileBrowserItem) {
   const menu = rowMenuRef.value;
   if (!menu) return;
+  lastRowMenuOpen = { row, at: Date.now() };
   menu.hide();
-  menuPos.value = { x: evt.clientX, y: evt.clientY };
+  menuPos.value = { x, y };
   // Show after the anchor has moved so the menu is placed at the pointer.
   void nextTick(() => {
     menuRow.value = row;

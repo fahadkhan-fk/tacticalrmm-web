@@ -22,9 +22,9 @@ export const FILE_TRANSFER_SLOT_RETRY_MAX_MS = 30_000;
 export const FILE_TRANSFER_SLOT_RETRY_MAX_ATTEMPTS = 20;
 export const FILE_TRANSFER_SLOT_RETRY_MAX_DURATION_MS = 10 * 60 * 1000;
 export const TRANSFER_SLOT_WAIT_MESSAGE =
-  "Waiting for a free transfer slot. Cancel or finish a paused transfer to continue.";
+  "Waiting for a free transfer slot. All slots are in use, possibly by other users; cancelling one of your paused transfers frees one.";
 export const TRANSFER_SLOT_WAIT_TIMEOUT_MESSAGE =
-  "No transfer slot became available. Cancel or finish a paused transfer, then try again.";
+  "No transfer slot became available. All slots are in use, possibly by other users; cancel one of your paused transfers or try again later.";
 export const TRANSFER_RATE_LIMIT_MESSAGE =
   "Too many requests. Try again later.";
 export const FILE_TRANSFER_TRANSIENT_RETRY_ATTEMPTS = 4;
@@ -35,11 +35,15 @@ export const FILE_TRANSFER_TRANSIENT_RETRY_HARD_CAP = 40;
 // A 408/204 means "not yet": the server answered, so the connection is fine.
 // Poll with backoff (50 ms doubling to 2 s): a short first step because the
 // agent usually delivers within ~100 ms on a fast link, the 2 s cap so a long
-// stall costs one request every 2 s. Give up on a stalled agent only after
-// the longer wait cap below.
+// stall costs one request every 2 s.
 export const FILE_TRANSFER_ACK_POLL_MS = 50;
 export const FILE_TRANSFER_ACK_POLL_MAX_MS = 2_000;
-export const FILE_TRANSFER_ACK_WAIT_MAX_MS = 10 * 60 * 1000;
+// must be longer than the agent's 120 s push/pull timeout
+export const FILE_TRANSFER_ACK_WAIT_MAX_MS = 150_000;
+export const FILE_TRANSFER_STALL_NOTICE_MS = 30_000;
+export const FILE_TRANSFER_FINALIZE_WAIT_MAX_MS = 10 * 60 * 1000;
+export const FILE_TRANSFER_AUTO_RESUME_ATTEMPTS = 5;
+export const FILE_TRANSFER_AUTO_RESUME_DELAY_MS = 15_000;
 export const TRANSFER_RECONNECTING_MESSAGE =
   "Connection interrupted — reconnecting…";
 export const DOWNLOAD_FILE_ACCESS_DENIED_MESSAGE =
@@ -63,3 +67,5 @@ export const TRANSFER_TOOLTIP_DISMISS = "Dismiss";
 export const TRANSFER_TOOLTIP_REMOVE_FROM_QUEUE = "Remove from queue";
 export const TRANSFER_SLOT_WAIT_LABEL = "Waiting for slot…";
 export const TRANSFER_RECONNECTING_LABEL = "Reconnecting…";
+export const TRANSFER_WAITING_FOR_AGENT_MESSAGE = "Waiting for the agent…";
+export const TRANSFER_WAITING_FOR_AGENT_LABEL = "Waiting for agent…";

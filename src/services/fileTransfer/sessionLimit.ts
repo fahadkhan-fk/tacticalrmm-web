@@ -8,6 +8,7 @@ import {
   FILE_TRANSFER_SLOT_RETRY_MAX_ATTEMPTS,
   FILE_TRANSFER_SLOT_RETRY_MAX_DURATION_MS,
   FILE_TRANSFER_SLOT_RETRY_MAX_MS,
+  FILE_TRANSFER_STALL_NOTICE_MS,
   FILE_TRANSFER_TRANSIENT_RETRY_ATTEMPTS,
   FILE_TRANSFER_TRANSIENT_RETRY_BASE_MS,
   FILE_TRANSFER_TRANSIENT_RETRY_HARD_CAP,
@@ -127,6 +128,13 @@ export class RetryableTransferError extends Error {
   }
 }
 
+export class TransferStalledError extends RetryableTransferError {
+  constructor(message = "The agent stopped responding to this transfer") {
+    super(message);
+    this.name = "TransferStalledError";
+  }
+}
+
 export class TransferNotReadyError extends RetryableTransferError {
   constructor(message: string) {
     super(message);
@@ -198,6 +206,7 @@ export interface TransientRetryInfo {
   attempt: number;
   delayMs: number;
   error: unknown;
+  waitingForAgent?: boolean;
 }
 
 export interface WithTransientRetryOptions {
@@ -208,6 +217,9 @@ export interface WithTransientRetryOptions {
   maxDurationMs?: number;
   isRetryable?: (err: unknown) => boolean;
   onRetry?: (info: TransientRetryInfo) => void;
+  // for complete calls, the agent can take minutes hashing a big file so
+  // don't treat that as a stall
+  finalizeWaitMs?: number;
 }
 
 export async function withTransientRetry<T>(
@@ -222,11 +234,13 @@ export async function withTransientRetry<T>(
     maxDurationMs = FILE_TRANSFER_TRANSIENT_RETRY_MAX_DURATION_MS,
     isRetryable = isRetryableTransferError,
     onRetry,
+    finalizeWaitMs,
   } = options;
   let attempt = 0;
   let firstFailureAt: number | null = null;
   let ackWaitStartedAt: number | null = null;
   let ackPolls = 0;
+  let stallNoticeSent = false;
 
   for (;;) {
     if (signal?.aborted) {
@@ -244,11 +258,28 @@ export async function withTransientRetry<T>(
         if (ackWaitStartedAt === null) {
           ackWaitStartedAt = Date.now();
         }
-        if (Date.now() - ackWaitStartedAt >= FILE_TRANSFER_ACK_WAIT_MAX_MS) {
-          throw err;
+        if (finalizeWaitMs !== undefined) {
+          if (Date.now() - ackWaitStartedAt >= finalizeWaitMs) throw err;
+        } else if (
+          Date.now() - ackWaitStartedAt >=
+          FILE_TRANSFER_ACK_WAIT_MAX_MS
+        ) {
+          throw new TransferStalledError();
         }
         if (signal?.aborted) {
           throw abortError();
+        }
+        if (
+          !stallNoticeSent &&
+          Date.now() - ackWaitStartedAt >= FILE_TRANSFER_STALL_NOTICE_MS
+        ) {
+          stallNoticeSent = true;
+          onRetry?.({
+            attempt: 0,
+            delayMs: 0,
+            error: err,
+            waitingForAgent: true,
+          });
         }
         ackPolls += 1;
         await sleepAbortable(ackPollDelayMs(ackPolls), signal);

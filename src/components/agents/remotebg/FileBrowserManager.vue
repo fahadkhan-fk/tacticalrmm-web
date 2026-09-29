@@ -221,11 +221,14 @@ import {
   FILE_BROWSER_FILTER_DEBOUNCE_MS,
 } from "@/constants/filebrowser";
 import {
+  FILE_TRANSFER_AUTO_RESUME_ATTEMPTS,
+  FILE_TRANSFER_AUTO_RESUME_DELAY_MS,
   FILE_TRANSFER_DEFAULT_CHUNK_SIZE,
   DOWNLOAD_FILE_ACCESS_DENIED_MESSAGE,
   TRANSFER_CONNECTION_LOST_MESSAGE,
   TRANSFER_RECONNECTING_MESSAGE,
   TRANSFER_SLOT_WAIT_MESSAGE,
+  TRANSFER_WAITING_FOR_AGENT_MESSAGE,
 } from "@/constants/fileTransfer";
 import type {
   DownloadQueueItem,
@@ -271,6 +274,7 @@ import {
   persistDownloadFileHandle,
   pickDownloadSaveHandle,
   pickExistingDownloadHandle,
+  queryFileHandlePermission,
   removeFileSystemFileHandle,
 } from "@/services/fileTransfer/resume";
 import {
@@ -283,7 +287,10 @@ import {
   hasStoredDownloadHandle,
   requestStoredDownloadHandle,
 } from "@/services/fileTransfer/transferQueuePersist";
-import { isRetryableTransferError } from "@/services/fileTransfer/sessionLimit";
+import {
+  TransferStalledError,
+  isRetryableTransferError,
+} from "@/services/fileTransfer/sessionLimit";
 import {
   createTransferTabSync,
   isTerminalTransferRelease,
@@ -801,6 +808,46 @@ function persistQueuesAsPaused(agentId: string = props.agent_id): void {
   }
 }
 
+// Resume stalled transfers automatically. Gives up after a few attempts
+// without progress and leaves it to the user.
+const autoResumeState = new Map<string, { attempts: number; offset: number }>();
+const autoResumeTimers = new Set<ReturnType<typeof setTimeout>>();
+
+function scheduleAutoResume(
+  item: DownloadQueueItem | UploadQueueItem,
+  err: unknown,
+  resume: (id: string) => unknown,
+): boolean {
+  const state = autoResumeState.get(item.id);
+  if (!(err instanceof TransferStalledError) && !state) return false;
+  const offset = item.committedOffset ?? 0;
+  const attempts = state && offset <= state.offset ? state.attempts : 0;
+  if (attempts >= FILE_TRANSFER_AUTO_RESUME_ATTEMPTS) {
+    autoResumeState.delete(item.id);
+    return false;
+  }
+  autoResumeState.set(item.id, { attempts: attempts + 1, offset });
+  const timer = setTimeout(() => {
+    autoResumeTimers.delete(timer);
+    const current =
+      findDownloadItem(item.id) ?? findUploadItem(item.id) ?? undefined;
+    if (
+      current?.status === "paused" &&
+      current.errorMessage === TRANSFER_RECONNECTING_MESSAGE
+    ) {
+      void resume(item.id);
+    }
+  }, FILE_TRANSFER_AUTO_RESUME_DELAY_MS);
+  autoResumeTimers.add(timer);
+  return true;
+}
+
+function clearAutoResumeTimers(): void {
+  for (const timer of autoResumeTimers) clearTimeout(timer);
+  autoResumeTimers.clear();
+  autoResumeState.clear();
+}
+
 function pauseInFlightTransfersForUnload(
   agentId: string = props.agent_id,
 ): void {
@@ -844,6 +891,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  clearAutoResumeTimers();
   pauseInFlightTransfersForUnload();
   cancelFilterDebounce();
   detachFindShortcut();
@@ -1932,7 +1980,8 @@ async function runSingleDownload(itemId: string): Promise<void> {
         }
         if (
           current.errorMessage === TRANSFER_SLOT_WAIT_MESSAGE ||
-          current.errorMessage === TRANSFER_RECONNECTING_MESSAGE
+          current.errorMessage === TRANSFER_RECONNECTING_MESSAGE ||
+          current.errorMessage === TRANSFER_WAITING_FOR_AGENT_MESSAGE
         ) {
           current.errorMessage = undefined;
         }
@@ -1950,15 +1999,18 @@ async function runSingleDownload(itemId: string): Promise<void> {
         if (
           (status === "downloading" || status === "completing") &&
           (current.errorMessage === TRANSFER_SLOT_WAIT_MESSAGE ||
-            current.errorMessage === TRANSFER_RECONNECTING_MESSAGE)
+            current.errorMessage === TRANSFER_RECONNECTING_MESSAGE ||
+            current.errorMessage === TRANSFER_WAITING_FOR_AGENT_MESSAGE)
         ) {
           current.errorMessage = undefined;
         }
       },
-      onRetrying: () => {
+      onRetrying: (info) => {
         const current = findDownloadItem(itemId);
         if (!current) return;
-        current.errorMessage = TRANSFER_RECONNECTING_MESSAGE;
+        current.errorMessage = info.waitingForAgent
+          ? TRANSFER_WAITING_FOR_AGENT_MESSAGE
+          : TRANSFER_RECONNECTING_MESSAGE;
       },
     };
 
@@ -2070,6 +2122,11 @@ async function runSingleDownload(itemId: string): Promise<void> {
       current.status = "paused";
       current.hidden = false;
       current.ownedByOtherTab = false;
+      if (scheduleAutoResume(current, err, resumeDownloadItem)) {
+        current.errorMessage = TRANSFER_RECONNECTING_MESSAGE;
+        void persistDownloadQueueMeta(props.agent_id, current);
+        return;
+      }
       current.errorMessage = TRANSFER_CONNECTION_LOST_MESSAGE;
       void persistDownloadQueueMeta(props.agent_id, current);
       if (downloadBatchIsSingle.value && downloadQueue.value.length === 1) {
@@ -2201,6 +2258,19 @@ function cancelDownloadItem(id: string) {
   abortDownloadItem(id, "cancel");
 }
 
+// Prefer the in-memory handle, IndexedDB is only needed after a reload.
+async function downloadFileHandleFor(
+  item: DownloadQueueItem,
+): Promise<FileSystemFileHandle | null> {
+  if (
+    item.resumeFileHandle &&
+    (await queryFileHandlePermission(item.resumeFileHandle)) === "granted"
+  ) {
+    return item.resumeFileHandle;
+  }
+  return requestStoredDownloadHandle(props.agent_id, item);
+}
+
 async function discardPausedDownload(item: DownloadQueueItem): Promise<void> {
   item.status = "cancelled";
   item.hidden = false;
@@ -2222,10 +2292,9 @@ async function discardPausedDownload(item: DownloadQueueItem): Promise<void> {
   // Remove what was already written: the partial file (while the Cancel
   // click still counts as a gesture for the permission prompt) and any
   // in-memory bytes kept for resume.
-  const handle = await requestStoredDownloadHandle(props.agent_id, {
-    ...item,
-    sessionId,
-  }).catch(() => null);
+  const handle = await downloadFileHandleFor({ ...item, sessionId }).catch(
+    () => null,
+  );
   if (handle) {
     await removeFileSystemFileHandle(handle);
   }
@@ -2269,7 +2338,7 @@ async function resumeDownloadItem(id: string) {
     );
     return;
   }
-  let handle = await requestStoredDownloadHandle(props.agent_id, item);
+  let handle = await downloadFileHandleFor(item);
   if (!handle && (await hasStoredDownloadHandle(props.agent_id, item))) {
     // Access to the partial file was denied. Starting over in memory would
     // throw away the bytes on disk (and fail above the in-memory limit).
@@ -2360,6 +2429,8 @@ function pauseAllDownloads() {
       abortDownloadItem(item.id, "pause");
     } else if (item.status === "queued") {
       item.status = "paused";
+    } else if (item.errorMessage === TRANSFER_RECONNECTING_MESSAGE) {
+      item.errorMessage = TRANSFER_CONNECTION_LOST_MESSAGE;
     }
   }
 }
@@ -2370,6 +2441,8 @@ function pauseAllUploads() {
       abortUploadItem(item.id, "pause");
     } else if (item.status === "queued") {
       item.status = "paused";
+    } else if (item.errorMessage === TRANSFER_RECONNECTING_MESSAGE) {
+      item.errorMessage = TRANSFER_CONNECTION_LOST_MESSAGE;
     }
   }
 }
@@ -2822,15 +2895,18 @@ async function runSingleUpload(itemId: string): Promise<void> {
           if (
             current &&
             (current.errorMessage === TRANSFER_SLOT_WAIT_MESSAGE ||
-              current.errorMessage === TRANSFER_RECONNECTING_MESSAGE)
+              current.errorMessage === TRANSFER_RECONNECTING_MESSAGE ||
+              current.errorMessage === TRANSFER_WAITING_FOR_AGENT_MESSAGE)
           ) {
             current.errorMessage = undefined;
           }
         },
-        onRetrying: () => {
+        onRetrying: (info) => {
           const current = findUploadItem(itemId);
           if (!current) return;
-          current.errorMessage = TRANSFER_RECONNECTING_MESSAGE;
+          current.errorMessage = info.waitingForAgent
+            ? TRANSFER_WAITING_FOR_AGENT_MESSAGE
+            : TRANSFER_RECONNECTING_MESSAGE;
         },
       },
     );
@@ -2910,6 +2986,11 @@ async function runSingleUpload(itemId: string): Promise<void> {
       current.status = "paused";
       current.hidden = false;
       current.ownedByOtherTab = false;
+      if (scheduleAutoResume(current, err, resumeUploadItem)) {
+        current.errorMessage = TRANSFER_RECONNECTING_MESSAGE;
+        void persistUploadQueueMeta(props.agent_id, current);
+        return;
+      }
       current.errorMessage = TRANSFER_CONNECTION_LOST_MESSAGE;
       void persistUploadQueueMeta(props.agent_id, current);
       if (!multiBatch) {

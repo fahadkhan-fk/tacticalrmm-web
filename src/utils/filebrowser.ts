@@ -14,6 +14,8 @@ import {
   TRANSFER_RATE_LIMIT_MESSAGE,
   TRANSFER_RECONNECTING_LABEL,
   TRANSFER_RECONNECTING_MESSAGE,
+  TRANSFER_WAITING_FOR_AGENT_LABEL,
+  TRANSFER_WAITING_FOR_AGENT_MESSAGE,
   TRANSFER_SLOT_WAIT_LABEL,
   TRANSFER_SLOT_WAIT_MESSAGE,
 } from "@/constants/fileTransfer";
@@ -403,7 +405,7 @@ export function getFileBrowserErrorMessage(
     return err.message;
   }
   if (isTransferSessionLimitError(err)) {
-    return "Too many concurrent file transfers. Cancel or finish a paused transfer, then try again.";
+    return "Too many concurrent file transfers. All slots are in use, possibly by other users; cancel one of your paused transfers or try again later.";
   }
   if (err instanceof AxiosError && err.response?.status === 429) {
     const detail = getAxiosErrorDetail(err);
@@ -952,6 +954,9 @@ export function transferQueueStatusLabelWithSlotWait(
   }
   if (errorMessage === TRANSFER_RECONNECTING_MESSAGE) {
     return TRANSFER_RECONNECTING_LABEL;
+  }
+  if (errorMessage === TRANSFER_WAITING_FOR_AGENT_MESSAGE) {
+    return TRANSFER_WAITING_FOR_AGENT_LABEL;
   }
   return baseLabel;
 }

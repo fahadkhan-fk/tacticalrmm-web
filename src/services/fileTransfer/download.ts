@@ -13,6 +13,7 @@ import {
 import {
   ARCHIVE_STATUS_POLL_INTERVAL_MS,
   FILE_TRANSFER_DEFAULT_CHUNK_SIZE,
+  FILE_TRANSFER_FINALIZE_WAIT_MAX_MS,
   MAX_IN_MEMORY_DOWNLOAD_BYTES,
 } from "@/constants/fileTransfer";
 import { ARCHIVE_PREPARE_TIMEOUT_MS } from "@/constants/filebrowser";
@@ -432,6 +433,7 @@ async function createDownloadSink(
       await openExistingHandle(existingHandle);
     } catch (err) {
       if (isAbortError(err)) throw err;
+      console.warn("file browser: could not reopen the download file", err);
       throw new Error(
         "Could not reopen the saved download file. Click Resume and allow file access.",
       );
@@ -709,7 +711,8 @@ export async function runFileDownloadTransfer(
           },
           signal,
         );
-      } catch {
+      } catch (err) {
+        if (isAbortError(err) || isRetryableTransferError(err)) throw err;
         staleSessionId = resumeSessionId;
         clearDownloadResume(agentId, sourcePath);
         initData = null;
@@ -791,7 +794,11 @@ export async function runFileDownloadTransfer(
     onStatus?.("completing");
     const completeData = await withTransientRetry(
       () => completeAgentFileDownload(agentId, sessionIdValue, signal),
-      { signal, onRetry: onRetrying },
+      {
+        signal,
+        onRetry: onRetrying,
+        finalizeWaitMs: FILE_TRANSFER_FINALIZE_WAIT_MAX_MS,
+      },
     );
 
     const localSha256 = await hasher.hex();
@@ -1054,7 +1061,11 @@ export async function runArchiveDownloadTransfer(
     onStatus?.("completing");
     const completeData = await withTransientRetry(
       () => completeAgentFileDownload(agentId, sessionIdValue, signal),
-      { signal, onRetry: onRetrying },
+      {
+        signal,
+        onRetry: onRetrying,
+        finalizeWaitMs: FILE_TRANSFER_FINALIZE_WAIT_MAX_MS,
+      },
     );
 
     const localSha256 = await hasher.hex();

@@ -9,8 +9,13 @@ import {
 import {
   FILE_TRANSFER_ACK_WAIT_MAX_MS,
   FILE_TRANSFER_DEFAULT_CHUNK_SIZE,
+  FILE_TRANSFER_FINALIZE_WAIT_MAX_MS,
+  FILE_TRANSFER_STALL_NOTICE_MS,
   FILE_TRANSFER_TRANSIENT_RETRY_HARD_CAP,
 } from "@/constants/fileTransfer";
+import { AxiosError } from "axios";
+
+import { getAxiosErrorDetail } from "@/utils/apiError";
 import type {
   FileTransferProgress,
   FileTransferUploadChunkReadyResponse,
@@ -30,6 +35,7 @@ import {
   type TransferSlotWaitInfo,
   type TransientRetryInfo,
   RetryableTransferError,
+  TransferStalledError,
   ackPollDelayMs,
   isRetryableTransferError,
   isTransferAckWaitError,
@@ -63,6 +69,14 @@ async function releaseUploadSession(
   }
 }
 
+function isRelayOffsetMismatch(err: unknown): boolean {
+  return (
+    err instanceof AxiosError &&
+    err.response?.status === 400 &&
+    /does not match expected \d+/i.test(getAxiosErrorDetail(err) || "")
+  );
+}
+
 const UPLOAD_TERMINAL_STATUSES = new Set([
   "completed",
   "failed",
@@ -94,6 +108,7 @@ async function waitForUploadPipelineSlot(
   const { signal, onRetry } = options;
   const started = Date.now();
   let polls = 0;
+  let stallNoticeSent = false;
   for (;;) {
     if (signal?.aborted) {
       throw new DOMException("Upload aborted", "AbortError");
@@ -103,12 +118,12 @@ async function waitForUploadPipelineSlot(
       { signal, onRetry },
     );
     if (UPLOAD_TERMINAL_STATUSES.has(ready.status)) {
-      if (ready.accepted_offset > offset) {
+      if (ready.status !== "failed" && ready.accepted_offset > offset) {
         return ready;
       }
       throw new Error(
         ready.status === "failed"
-          ? "Upload failed"
+          ? ready.error || "Upload failed"
           : `Upload session is ${ready.status}`,
       );
     }
@@ -116,9 +131,14 @@ async function waitForUploadPipelineSlot(
       return ready;
     }
     if (Date.now() - started >= FILE_TRANSFER_ACK_WAIT_MAX_MS) {
-      throw new RetryableTransferError(
-        "Timed out waiting for agent to commit previous chunk",
-      );
+      throw new TransferStalledError();
+    }
+    if (
+      !stallNoticeSent &&
+      Date.now() - started >= FILE_TRANSFER_STALL_NOTICE_MS
+    ) {
+      stallNoticeSent = true;
+      onRetry?.({ attempt: 0, delayMs: 0, error: null, waitingForAgent: true });
     }
     polls += 1;
     await sleepAbortable(ackPollDelayMs(polls), signal);
@@ -142,13 +162,18 @@ async function waitForUploadCommitted(
       () => getUploadChunkReady(agentId, sessionId, signal),
       { signal, onRetry },
     );
+    if (ready.status === "failed") {
+      throw new Error(ready.error || "Upload failed");
+    }
     if (
       ready.committed_offset >= totalSize ||
       UPLOAD_TERMINAL_STATUSES.has(ready.status)
     ) {
       return;
     }
-    if (Date.now() - started >= FILE_TRANSFER_ACK_WAIT_MAX_MS) return;
+    if (Date.now() - started >= FILE_TRANSFER_ACK_WAIT_MAX_MS) {
+      throw new TransferStalledError();
+    }
     polls += 1;
     await sleepAbortable(ackPollDelayMs(polls), signal);
   }
@@ -187,7 +212,9 @@ export async function runFileUploadTransfer(
         },
         signal,
       );
-    } catch {
+    } catch (err) {
+      // agent unreachable, keep the session so it can be resumed
+      if (isAbortError(err) || isRetryableTransferError(err)) throw err;
       staleSessionId = resumeSessionId;
       clearUploadResume(agentId, file, destinationPath);
       initData = null;
@@ -296,6 +323,12 @@ export async function runFileUploadTransfer(
             },
           );
         } catch (err) {
+          if (isRelayOffsetMismatch(err)) {
+            // e.g. redis restarted, resuming re-syncs the offset
+            throw new TransferStalledError(
+              "The server lost track of this upload",
+            );
+          }
           if (!isTransferAckWaitError(err)) {
             throw err;
           }
@@ -335,7 +368,11 @@ export async function runFileUploadTransfer(
     });
     const completeData = await withTransientRetry(
       () => completeAgentFileUpload(agentId, sessionId, fileSha256, signal),
-      { signal, onRetry: onRetrying },
+      {
+        signal,
+        onRetry: onRetrying,
+        finalizeWaitMs: FILE_TRANSFER_FINALIZE_WAIT_MAX_MS,
+      },
     );
 
     const agentSha = (completeData.sha256 || "").toLowerCase();

@@ -169,7 +169,11 @@ function resumeCaption(item: UploadQueueItem): string | null {
       ? `Select original file to resume · ${window}`
       : "Select the original file to resume";
   }
-  return formatResumeWindowCaption(item.expiresAt);
+  const parts: string[] = [];
+  if (item.errorMessage) parts.push(item.errorMessage);
+  const window = formatResumeWindowCaption(item.expiresAt);
+  if (window) parts.push(window);
+  return parts.length ? parts.join(" · ") : null;
 }
 
 function uploadStatusLabelForItem(item: UploadQueueItem): string {
