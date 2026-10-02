@@ -310,7 +310,10 @@ import {
 } from "@/constants/filebrowser";
 import type { FileBrowserItem } from "@/types/filebrowser";
 
-type FileBrowserTableRoot = HTMLElement | { $el?: HTMLElement };
+type FileBrowserTableRoot = HTMLElement | {
+  $el?: HTMLElement;
+  scrollTo?: (index: number) => void;
+};
 
 const $q = useQuasar();
 
@@ -500,11 +503,65 @@ function unbindTableScroll() {
   }
 }
 
+let pendingScrollToTop = false;
+
+function scrollTableToTop() {
+  const inst = tableRef.value;
+  if (
+    inst &&
+    !(inst instanceof HTMLElement) &&
+    typeof inst.scrollTo === "function"
+  ) {
+    inst.scrollTo(0);
+  }
+  if (!tableScrollEl) {
+    bindTableScroll();
+  }
+  if (tableScrollEl) {
+    tableScrollEl.scrollTop = 0;
+  }
+}
+
+function scheduleScrollToTop() {
+  void nextTick(() => {
+    if (!pendingScrollToTop || props.loading) return;
+    bindTableScroll();
+    scrollTableToTop();
+    requestAnimationFrame(() => {
+      if (!pendingScrollToTop || props.loading) return;
+      scrollTableToTop();
+      pendingScrollToTop = false;
+    });
+  });
+}
+
+watch(
+  () => props.currentPath,
+  () => {
+    pendingScrollToTop = true;
+    if (!props.loading) {
+      scheduleScrollToTop();
+    }
+  },
+);
+
+watch(
+  () => props.loading,
+  (isLoading) => {
+    if (pendingScrollToTop && !isLoading) {
+      scheduleScrollToTop();
+    }
+  },
+);
+
 watch(
   () => props.rows.length,
   () => {
     void nextTick(() => {
       bindTableScroll();
+      if (pendingScrollToTop && !props.loading) {
+        scheduleScrollToTop();
+      }
       onTableMiddleScroll();
     });
   },
